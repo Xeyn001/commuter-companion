@@ -20,8 +20,98 @@
 const BUS_IDX = {
   loaded:false, stops:new Map(), services:new Map(),
   routes:new Map(), dists:new Map(), atStop:new Map(),
-  grid:new Map(), edges:0, railJoins:0, builtMs:0, source:null
+  grid:new Map(), edges:0, railJoins:0, builtMs:0, source:null,
+  /* name -> [code]. Built with the rest of the index so a commuter can
+     type "amber gardens" and be understood. Without it matchPlace only
+     ever saw the 144 rail places, and every bus stop in Singapore was
+     unreachable by name. */
+  byName:new Map(), names:[]
 };
+
+/* Stop names are written for a pole, not a search box: "Opp Blk 157A",
+   "Bef Jln Eunos", "Aft Braddell Rd". Strip the positional prefixes so
+   the name the commuter knows is what matches. */
+const STOP_PREFIX = /^(opp|opposite|bef|before|aft|after|bet|between|blk|block)\s+/i;
+/* LTA writes stop names for a pole, not a search box: "Amber Gdns",
+   "Marine Pde Stn", "Bt Batok Int". A commuter types "Amber Gardens".
+   Both are normalised to the same key so either finds the stop. */
+const ABBREV = {
+  gdns:"gardens", gdn:"garden", pde:"parade", stn:"station", rd:"road",
+  ave:"avenue", av:"avenue", st:"street", dr:"drive", cl:"close",
+  cres:"crescent", ter:"terrace", pl:"place", lk:"link", wk:"walk",
+  int:"interchange", ctr:"centre", cte:"centre", cplx:"complex",
+  blk:"block", sch:"school", hosp:"hospital", pk:"park", mkt:"market",
+  bt:"bukit", jln:"jalan", lor:"lorong", tg:"tanjong", kg:"kampong",
+  upp:"upper", nth:"north", sth:"south", est:"estate", ind:"industrial",
+  cmnty:"community", cc:"community club", pri:"primary", sec:"secondary",
+  hts:"heights", gr:"grove", vw:"view", ri:"rise", ctrl:"central",
+  mrt:"station", ns:"north south", ew:"east west"
+};
+function normStopName(s){
+  return String(s||"").toLowerCase()
+    .replace(/[^a-z0-9 ]+/g," ")
+    .replace(/\s+/g," ").trim()
+    .split(" ").map(w => ABBREV[w] || w).join(" ");
+}
+function rawStopName(s){
+  return String(s||"").toLowerCase().replace(/[^a-z0-9 ]+/g," ")
+    .replace(/\s+/g," ").trim();
+}
+function stopNameKeys(name){
+  const full = normStopName(name);
+  /* Both the expanded and the literal form. "Ter" is Terrace in a street
+     name and Terminal at the airport; indexing both means neither
+     reading loses. */
+  const keys = new Set([full, rawStopName(name)]);
+  let stripped = full;
+  while(STOP_PREFIX.test(stripped)) stripped = stripped.replace(STOP_PREFIX,"").trim();
+  if(stripped && stripped !== full) keys.add(stripped);
+  /* "Marine Pde Stn Exit 2" should also answer to "marine pde stn" */
+  const noExit = stripped.replace(/\s+exit\s+\w+$/,"").trim();
+  if(noExit && noExit !== stripped) keys.add(noExit);
+  return [...keys].filter(Boolean);
+}
+
+/* Best matching bus stop for a free-text name, or null. Exact first,
+   then prefix, then containment — never a fuzzy guess, because sending
+   someone to the wrong stop is worse than saying you do not know. */
+function matchBusStop(query){
+  if(!BUS_IDX.loaded) return null;
+  const raw = normStopName(query);
+  /* "opposite amber gardens" is a real, different stop from "amber
+     gardens" — the other side of the road. Honour it when the pair
+     exists rather than quietly sending them across the street. */
+  const wantsOpp = /^(opp|opposite)\s+/.test(raw);
+  const q = raw.replace(/^(opp|opposite)\s+/,"").trim();
+  if(q.length < 3) return null;
+  if(wantsOpp){
+    const opp = BUS_IDX.byName.get("opp " + q) || BUS_IDX.byName.get("opposite " + q);
+    if(opp && opp.length) return opp[0];
+  }
+  const hit = BUS_IDX.byName.get(q) || BUS_IDX.byName.get(raw);
+  if(hit && hit.length) return hit[0];
+  let best=null, bestLen=Infinity;
+  for(const [name, codes] of BUS_IDX.byName){
+    if(name.length >= bestLen) continue;
+    if(name.startsWith(q) || q.startsWith(name) || name.includes(q)){
+      best = codes[0]; bestLen = name.length;
+    }
+  }
+  return best;
+}
+function searchBusStops(query, limit){
+  if(!BUS_IDX.loaded) return [];
+  const q = normStopName(query);
+  if(q.length < 2) return [];
+  const out=[];
+  for(const [name, codes] of BUS_IDX.byName){
+    if(name.startsWith(q)) out.push({code:codes[0], name, score:0});
+    else if(name.includes(q)) out.push({code:codes[0], name, score:1});
+    if(out.length > 400) break;
+  }
+  out.sort((a,b)=>a.score-b.score || a.name.length-b.name.length);
+  return out.slice(0, limit||8);
+}
 
 /* ---- spatial index ------------------------------------------
    A flat grid. Singapore is 50 km across and we only ever ask for
@@ -115,6 +205,10 @@ function loadBusIndex(data, opts){
     // A few rows carry 0,0. Dropping them beats plotting the Gulf of Guinea.
     if(!isFinite(la) || !isFinite(lo) || (la===0 && lo===0)){ dropped++; continue; }
     BUS_IDX.stops.set(code, {n:s.n||code, r:s.r||"", la, lo});
+    for(const k of stopNameKeys(s.n||code)){
+      if(!BUS_IDX.byName.has(k)) BUS_IDX.byName.set(k, []);
+      BUS_IDX.byName.get(k).push(code);
+    }
     gridPut(code, la, lo);
   }
   for(const [no, meta] of Object.entries(data.services||{})) BUS_IDX.services.set(no, meta);

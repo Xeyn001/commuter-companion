@@ -19,6 +19,7 @@ console.log("built index.html — " + (page.length / 1024).toFixed(0) + " kB");
 /* Tests need the same single scope the browser gets. */
 const bundle = readFileSync("engine.js", "utf8") + "\n" + busIndex + "\n" + events + `
 export {BUS_IDX, loadBusIndex, isBusStop, busStop, busStopName, busStopLabel,
+  matchBusStop, searchBusStops, normStopName,
         busStopRoad, servicesAt, servicesBetween, stopsNear, serviceNo,
         busWait, busWaitMins, serviceRunning, bandFor, dayTypeOf,
         EVENTS, loadEvents, eventsAt, eventLift, eventsToday, eventsOnPlan,

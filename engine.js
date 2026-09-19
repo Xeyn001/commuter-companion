@@ -942,6 +942,15 @@ function matchPlace(text){
   }
   if(best) return best;
   for(const [k,v] of Object.entries(ALIAS)) if(t.includes(k)) return v;
+  /* Nothing in the 144 rail places matched. Once the real bus network is
+     loaded there are another 5,200 stops that are perfectly valid
+     origins and destinations — "Amber Gardens" is a bus stop, not a
+     station, and refusing it made the app look broken. Rail is still
+     tried first, because a commuter typing "Bedok" means the station. */
+  if(typeof matchBusStop === "function"){
+    const stop = matchBusStop(text);
+    if(stop) return stop;
+  }
   return null;
 }
 

@@ -1,155 +1,748 @@
 {
-  "_README": [
-    "Singapore events that move large numbers of people onto the network.",
-    "",
-    "This is a CURATED file, not a feed. There is no official API for event",
-    "crowding, so inventing one would be dishonest. What is here is split into",
-    "two kinds:",
-    "",
-    "  fixed   — the date is the same every year. Safe to ship.",
-    "  moving  — the date follows a lunar or Islamic calendar and changes every",
-    "            year. `date` is null until you fill it in. The app will NOT",
-    "            apply an event with no date, and says so in the Sources tab.",
-    "",
-    "Fill the moving dates from the official public holiday list at",
-    "https://www.mom.gov.sg/employment-practices/public-holidays or the",
-    "public holidays dataset on https://data.gov.sg/datasets , then set",
-    "`dates` to an array of ISO dates (YYYY-MM-DD).",
-    "",
-    "The LOCATIONS and the effect sizes are the stable part. Deepavali fills",
-    "Little India whatever date it falls on. Those are curated from where the",
-    "celebrations actually happen, and each entry says what it is based on.",
-    "",
-    "`lift` is a multiplier on the modelled crowd level at the named places,",
-    "clamped so it can never exceed a full train. It is a PRIOR: whenever LTA",
-    "PCDForecast or PCDRealTime has a measured figure for a station, the",
-    "measurement wins and this is ignored."
-  ],
-
-  "version": "2026.1",
-  "note": "Effect sizes are judgement, not measurement. See WRITEUP.md.",
-
-  "events": [
-    {
-      "id": "ndp",
-      "name": "National Day Parade",
-      "kind": "fixed",
-      "dates": ["2026-08-09"],
-      "window": [14, 24],
-      "places": ["Marina Bay", "Bayfront", "City Hall", "Esplanade", "Promenade", "Raffles Place", "Marina South"],
-      "lift": 1.9,
-      "roadClosures": true,
-      "basis": "Parade at the Padang / Marina Bay with evening fireworks; the surrounding stations are closed or one-way for crowd control most years.",
-      "advice": "Expect station crowd control and road closures around Marina Bay from mid-afternoon."
-    },
-    {
-      "id": "nye",
-      "name": "New Year countdown",
-      "kind": "fixed",
-      "dates": ["2026-12-31"],
-      "window": [20, 26],
-      "places": ["Marina Bay", "Bayfront", "Esplanade", "Promenade", "City Hall", "Raffles Place"],
-      "lift": 1.9,
-      "basis": "Countdown and fireworks at Marina Bay; trains run extended hours.",
-      "advice": "Trains usually run late. Leaving before midnight or well after is far easier than at 00:15."
-    },
-    {
-      "id": "christmas-orchard",
-      "name": "Christmas on Orchard Road",
-      "kind": "fixed",
-      "dates": ["2026-12-19", "2026-12-20", "2026-12-24", "2026-12-25", "2026-12-26"],
-      "window": [16, 24],
-      "places": ["Orchard", "Somerset", "Dhoby Ghaut", "Orchard Boulevard"],
-      "lift": 1.5,
-      "basis": "Orchard Road light-up draws heavy evening footfall through December weekends.",
-      "advice": "Orchard and Somerset are busiest between 19:00 and 22:00."
-    },
-    {
-      "id": "f1",
-      "name": "Formula 1 Singapore Grand Prix",
-      "kind": "moving",
-      "dates": null,
-      "dateHint": "Usually a weekend in late September or early October. Confirm at singaporegp.sg.",
-      "window": [15, 26],
-      "places": ["Marina Bay", "Esplanade", "Promenade", "Bayfront", "City Hall", "Nicoll Highway", "Stadium"],
-      "lift": 1.8,
-      "roadClosures": true,
-      "basis": "Street circuit through Marina Bay; extensive road closures for about a week, heaviest on race night.",
-      "advice": "Road closures make buses unreliable around the circuit. Rail is the safer choice."
-    },
-    {
-      "id": "cny",
-      "name": "Chinese New Year",
-      "kind": "moving",
-      "dates": null,
-      "dateHint": "Lunar calendar, usually late January or February. Two public holidays.",
-      "window": [10, 23],
-      "places": ["Chinatown", "Telok Ayer", "Maxwell", "Outram Park", "Clarke Quay"],
-      "lift": 1.7,
-      "alsoQuieter": true,
-      "basis": "Chinatown street market in the fortnight before; the island-wide commute is much lighter on the holidays themselves.",
-      "advice": "Chinatown is very busy in the evenings beforehand. On the holidays themselves the rest of the network is unusually quiet."
-    },
-    {
-      "id": "deepavali",
-      "name": "Deepavali",
-      "kind": "moving",
-      "dates": null,
-      "dateHint": "Hindu calendar, usually October or November. One public holiday.",
-      "window": [16, 24],
-      "places": ["Little India", "Farrer Park", "Rochor", "Jalan Besar"],
-      "lift": 1.8,
-      "basis": "Little India light-up and street market; Serangoon Road is partly pedestrianised in the run-up.",
-      "advice": "Little India is extremely busy in the evenings. Farrer Park is often the easier station."
-    },
-    {
-      "id": "hari-raya",
-      "name": "Hari Raya Puasa",
-      "kind": "moving",
-      "dates": null,
-      "dateHint": "Islamic calendar, moves about 11 days earlier each year. One public holiday.",
-      "window": [17, 25],
-      "places": ["Paya Lebar", "Eunos", "Dakota", "Aljunied"],
-      "lift": 1.6,
-      "basis": "Geylang Serai bazaar in the month of Ramadan beforehand, busiest in the final week.",
-      "advice": "Paya Lebar is heaviest in the evening through Ramadan."
-    },
-    {
-      "id": "thaipusam",
-      "name": "Thaipusam",
-      "kind": "moving",
-      "dates": null,
-      "dateHint": "Tamil calendar, usually late January or February.",
-      "window": [5, 22],
-      "places": ["Little India", "Farrer Park", "Dhoby Ghaut", "Bras Basah", "Clarke Quay"],
-      "lift": 1.4,
-      "roadClosures": true,
-      "basis": "Foot procession between temples in Little India and Tank Road; roads along the route close in stages.",
-      "advice": "Roads along the procession route close in stages, which affects buses more than trains."
-    },
-    {
-      "id": "mid-autumn",
-      "name": "Mid-Autumn Festival",
-      "kind": "moving",
-      "dates": null,
-      "dateHint": "Lunar calendar, usually September or early October. Not a public holiday.",
-      "window": [17, 23],
-      "places": ["Chinatown", "Telok Ayer", "Gardens by the Bay", "Bayfront"],
-      "lift": 1.4,
-      "basis": "Chinatown lantern display and Gardens by the Bay mid-autumn event.",
-      "advice": "Chinatown is busiest in the evening, particularly at weekends."
-    },
-    {
-      "id": "nsstadium",
-      "name": "National Stadium event",
-      "kind": "manual",
-      "dates": null,
-      "dateHint": "Add the date of any concert or match at the National Stadium. 55,000 capacity empties in about 40 minutes.",
-      "window": [17, 25],
-      "places": ["Stadium", "Mountbatten", "Nicoll Highway", "Dakota", "Kallang"],
-      "lift": 2.0,
-      "basis": "Stadium capacity against the Circle Line's throughput at Stadium station.",
-      "advice": "Stadium station is severe for about 40 minutes after the event ends. Mountbatten is a ten-minute walk and far easier."
-    }
-  ]
+ "_README": [
+  "Singapore events that move large numbers of people onto the network.",
+  "",
+  "This is a CURATED file, not a feed. There is no official API for event",
+  "crowding, so inventing one would be dishonest. What is here is split into",
+  "two kinds:",
+  "",
+  "  fixed   \u2014 the date is the same every year. Safe to ship.",
+  "  moving  \u2014 the date follows a lunar or Islamic calendar and changes every",
+  "            year. `date` is null until you fill it in. The app will NOT",
+  "            apply an event with no date, and says so in the Sources tab.",
+  "",
+  "Fill the moving dates from the official public holiday list at",
+  "https://www.mom.gov.sg/employment-practices/public-holidays or the",
+  "public holidays dataset on https://data.gov.sg/datasets , then set",
+  "`dates` to an array of ISO dates (YYYY-MM-DD).",
+  "",
+  "The LOCATIONS and the effect sizes are the stable part. Deepavali fills",
+  "Little India whatever date it falls on. Those are curated from where the",
+  "celebrations actually happen, and each entry says what it is based on.",
+  "",
+  "`lift` is a multiplier on the modelled crowd level at the named places,",
+  "clamped so it can never exceed a full train. It is a PRIOR: whenever LTA",
+  "PCDForecast or PCDRealTime has a measured figure for a station, the",
+  "measurement wins and this is ignored."
+ ],
+ "version": "2026.3",
+ "note": "Public holidays are gazetted by MOM. Event dates were supplied by the team from public announcements and are not from an official feed \u2014 each entry says so in its basis field. Anything still without a date is listed in the app as awaiting one and is never applied to a prediction.",
+ "events": [
+  {
+   "id": "ndp",
+   "name": "National Day Parade",
+   "kind": "fixed",
+   "dates": [
+    "2026-08-09"
+   ],
+   "window": [
+    14,
+    24
+   ],
+   "places": [
+    "Marina Bay",
+    "Bayfront",
+    "City Hall",
+    "Esplanade",
+    "Promenade",
+    "Raffles Place",
+    "Marina South"
+   ],
+   "lift": 1.9,
+   "roadClosures": true,
+   "basis": "Parade at the Padang / Marina Bay with evening fireworks; the surrounding stations are closed or one-way for crowd control most years.",
+   "advice": "Expect station crowd control and road closures around Marina Bay from mid-afternoon."
+  },
+  {
+   "id": "nye",
+   "name": "New Year countdown",
+   "kind": "fixed",
+   "dates": [
+    "2026-12-31"
+   ],
+   "window": [
+    20,
+    26
+   ],
+   "places": [
+    "Marina Bay",
+    "Bayfront",
+    "Esplanade",
+    "Promenade",
+    "City Hall",
+    "Raffles Place"
+   ],
+   "lift": 1.9,
+   "basis": "Countdown and fireworks at Marina Bay; trains run extended hours.",
+   "advice": "Trains usually run late. Leaving before midnight or well after is far easier than at 00:15."
+  },
+  {
+   "id": "christmas-orchard",
+   "name": "Christmas on Orchard Road",
+   "kind": "fixed",
+   "dates": [
+    "2026-12-19",
+    "2026-12-20",
+    "2026-12-24",
+    "2026-12-25",
+    "2026-12-26"
+   ],
+   "window": [
+    16,
+    24
+   ],
+   "places": [
+    "Orchard",
+    "Somerset",
+    "Dhoby Ghaut",
+    "Orchard Boulevard"
+   ],
+   "lift": 1.5,
+   "basis": "Orchard Road light-up draws heavy evening footfall through December weekends.",
+   "advice": "Orchard and Somerset are busiest between 19:00 and 22:00."
+  },
+  {
+   "id": "thaipusam",
+   "name": "Thaipusam",
+   "kind": "moving",
+   "dates": null,
+   "dateHint": "Tamil calendar, usually late January or February.",
+   "window": [
+    5,
+    22
+   ],
+   "places": [
+    "Little India",
+    "Farrer Park",
+    "Dhoby Ghaut",
+    "Bras Basah",
+    "Clarke Quay"
+   ],
+   "lift": 1.4,
+   "roadClosures": true,
+   "basis": "Foot procession between temples in Little India and Tank Road; roads along the route close in stages.",
+   "advice": "Roads along the procession route close in stages, which affects buses more than trains."
+  },
+  {
+   "id": "mid-autumn",
+   "name": "Mid-Autumn Festival",
+   "kind": "moving",
+   "dates": null,
+   "dateHint": "Lunar calendar, usually September or early October. Not a public holiday.",
+   "window": [
+    17,
+    23
+   ],
+   "places": [
+    "Chinatown",
+    "Telok Ayer",
+    "Gardens by the Bay",
+    "Bayfront"
+   ],
+   "lift": 1.4,
+   "basis": "Chinatown lantern display and Gardens by the Bay mid-autumn event.",
+   "advice": "Chinatown is busiest in the evening, particularly at weekends."
+  },
+  {
+   "id": "nsstadium",
+   "name": "National Stadium event",
+   "kind": "manual",
+   "dates": null,
+   "dateHint": "Add the date of any concert or match at the National Stadium. 55,000 capacity empties in about 40 minutes.",
+   "window": [
+    17,
+    25
+   ],
+   "places": [
+    "Stadium",
+    "Mountbatten",
+    "Nicoll Highway",
+    "Dakota",
+    "Kallang"
+   ],
+   "lift": 2.0,
+   "basis": "Stadium capacity against the Circle Line's throughput at Stadium station.",
+   "advice": "Stadium station is severe for about 40 minutes after the event ends. Mountbatten is a ten-minute walk and far easier."
+  },
+  {
+   "id": "ph-nationalday",
+   "name": "National Day",
+   "kind": "holiday",
+   "dates": [
+    "2026-08-09"
+   ],
+   "window": [
+    0,
+    24
+   ],
+   "places": [],
+   "lift": 1.0,
+   "roadClosures": false,
+   "basis": "Gazetted public holiday, fixed date. The parade is listed separately.",
+   "advice": "Public holiday. See the National Day Parade entry for station closures."
+  },
+  {
+   "id": "techweek",
+   "name": "Tech Week Singapore",
+   "kind": "fixed",
+   "dates": [
+    "2026-09-29",
+    "2026-09-30"
+   ],
+   "window": [
+    8,
+    19
+   ],
+   "places": [
+    "Bayfront",
+    "Marina Bay",
+    "Promenade"
+   ],
+   "lift": 1.25,
+   "roadClosures": false,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "Marina Bay Sands Expo. Busier than usual around Bayfront through the morning."
+  },
+  {
+   "id": "weeknd",
+   "name": "The Weeknd \u2014 After Hours Til Dawn",
+   "kind": "fixed",
+   "dates": [
+    "2026-10-02",
+    "2026-10-03"
+   ],
+   "window": [
+    17,
+    25
+   ],
+   "places": [
+    "Stadium",
+    "Mountbatten",
+    "Nicoll Highway",
+    "Promenade"
+   ],
+   "lift": 1.85,
+   "roadClosures": true,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "National Stadium. Expect a heavy crowd at Stadium from 18:00 and a surge after the show."
+  },
+  {
+   "id": "itzy",
+   "name": "ITZY World Tour",
+   "kind": "fixed",
+   "dates": [
+    "2026-10-03"
+   ],
+   "window": [
+    17,
+    24
+   ],
+   "places": [
+    "Stadium",
+    "Mountbatten"
+   ],
+   "lift": 1.5,
+   "roadClosures": false,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "Indoor Stadium. Crowds around Stadium in the evening."
+  },
+  {
+   "id": "f1-2026",
+   "name": "Formula 1 Singapore Grand Prix",
+   "kind": "fixed",
+   "dates": [
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11"
+   ],
+   "window": [
+    14,
+    26
+   ],
+   "places": [
+    "Marina Bay",
+    "Bayfront",
+    "Promenade",
+    "Esplanade",
+    "City Hall",
+    "Raffles Place",
+    "Nicoll Highway"
+   ],
+   "lift": 2.1,
+   "roadClosures": true,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "Marina Bay Street Circuit. Extensive road closures and station crowd control from mid-afternoon; several city-centre roads shut for days around the race."
+  },
+  {
+   "id": "bigbang",
+   "name": "BIGBANG World Tour",
+   "kind": "fixed",
+   "dates": [
+    "2026-10-17"
+   ],
+   "window": [
+    17,
+    25
+   ],
+   "places": [
+    "Stadium",
+    "Mountbatten",
+    "Nicoll Highway"
+   ],
+   "lift": 1.8,
+   "roadClosures": false,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "National Stadium. Heavy crowds at Stadium after the show."
+  },
+  {
+   "id": "nct127",
+   "name": "NCT 127 Tour",
+   "kind": "fixed",
+   "dates": [
+    "2026-10-18"
+   ],
+   "window": [
+    17,
+    24
+   ],
+   "places": [
+    "Stadium",
+    "Mountbatten"
+   ],
+   "lift": 1.5,
+   "roadClosures": false,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "Indoor Stadium."
+  },
+  {
+   "id": "ph-deepavali-2026",
+   "name": "Deepavali",
+   "kind": "holiday",
+   "dates": [
+    "2026-11-08"
+   ],
+   "window": [
+    0,
+    24
+   ],
+   "places": [
+    "Little India",
+    "Farrer Park",
+    "Rochor"
+   ],
+   "lift": 1.4,
+   "roadClosures": false,
+   "basis": "Gazetted by the Ministry of Manpower. Monday 9 Nov observed.",
+   "advice": "Public holiday. Little India is busy from late afternoon and through the evening."
+  },
+  {
+   "id": "csmajor",
+   "name": "Counter-Strike PGL Major",
+   "kind": "fixed",
+   "dates": [
+    "2026-11-25",
+    "2026-11-26",
+    "2026-11-27",
+    "2026-11-28",
+    "2026-11-29",
+    "2026-11-30",
+    "2026-12-01",
+    "2026-12-02",
+    "2026-12-03",
+    "2026-12-04",
+    "2026-12-05",
+    "2026-12-06",
+    "2026-12-07",
+    "2026-12-08",
+    "2026-12-09",
+    "2026-12-10",
+    "2026-12-11",
+    "2026-12-12",
+    "2026-12-13"
+   ],
+   "window": [
+    10,
+    24
+   ],
+   "places": [
+    "Stadium",
+    "Mountbatten"
+   ],
+   "lift": 1.35,
+   "roadClosures": false,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "Indoor Stadium, runs for nearly three weeks. Busiest on finals weekends."
+  },
+  {
+   "id": "nutcracker",
+   "name": "The Nutcracker \u2014 State Ballet of Georgia",
+   "kind": "fixed",
+   "dates": [
+    "2026-11-26",
+    "2026-11-27",
+    "2026-11-28",
+    "2026-11-29"
+   ],
+   "window": [
+    18,
+    23
+   ],
+   "places": [
+    "Bayfront",
+    "Marina Bay"
+   ],
+   "lift": 1.2,
+   "roadClosures": false,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "Sands Theatre."
+  },
+  {
+   "id": "babymonster",
+   "name": "BABYMONSTER World Tour",
+   "kind": "fixed",
+   "dates": [
+    "2026-11-28",
+    "2026-11-29"
+   ],
+   "window": [
+    17,
+    24
+   ],
+   "places": [
+    "Stadium",
+    "Mountbatten"
+   ],
+   "lift": 1.5,
+   "roadClosures": false,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "Evening crowds around Stadium."
+  },
+  {
+   "id": "bts",
+   "name": "BTS World Tour",
+   "kind": "fixed",
+   "dates": [
+    "2026-12-17",
+    "2026-12-18",
+    "2026-12-19",
+    "2026-12-20",
+    "2026-12-21",
+    "2026-12-22"
+   ],
+   "window": [
+    15,
+    26
+   ],
+   "places": [
+    "Stadium",
+    "Mountbatten",
+    "Nicoll Highway",
+    "Promenade",
+    "Esplanade"
+   ],
+   "lift": 2.2,
+   "roadClosures": true,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "National Stadium, six nights. The heaviest sustained crowding of the year around Stadium \u2014 plan to leave well before or well after."
+  },
+  {
+   "id": "ph-newyear-2027",
+   "name": "New Year's Day",
+   "kind": "holiday",
+   "dates": [
+    "2027-01-01"
+   ],
+   "window": [
+    0,
+    24
+   ],
+   "places": [],
+   "lift": 1.0,
+   "roadClosures": false,
+   "basis": "Gazetted by the Ministry of Manpower.",
+   "advice": "Public holiday, long weekend. Weekend service pattern."
+  },
+  {
+   "id": "ph-cny-2027",
+   "name": "Chinese New Year",
+   "kind": "holiday",
+   "dates": [
+    "2027-02-06",
+    "2027-02-07"
+   ],
+   "window": [
+    0,
+    24
+   ],
+   "places": [
+    "Chinatown",
+    "Outram Park",
+    "Telok Ayer"
+   ],
+   "lift": 1.5,
+   "roadClosures": false,
+   "basis": "Gazetted by the Ministry of Manpower. Monday 8 Feb observed.",
+   "advice": "Public holiday. Chinatown is heavy in the days before; the network is quiet on the day itself."
+  },
+  {
+   "id": "ph-hrp-2027",
+   "name": "Hari Raya Puasa",
+   "kind": "holiday",
+   "dates": [
+    "2027-03-10"
+   ],
+   "window": [
+    0,
+    24
+   ],
+   "places": [
+    "Bugis",
+    "Lavender",
+    "Kallang"
+   ],
+   "lift": 1.3,
+   "roadClosures": false,
+   "basis": "Gazetted by the Ministry of Manpower.",
+   "advice": "Public holiday. Geylang Serai and Bugis busy in the evenings beforehand."
+  },
+  {
+   "id": "ph-goodfriday-2027",
+   "name": "Good Friday",
+   "kind": "holiday",
+   "dates": [
+    "2027-03-26"
+   ],
+   "window": [
+    0,
+    24
+   ],
+   "places": [],
+   "lift": 1.0,
+   "roadClosures": false,
+   "basis": "Gazetted by the Ministry of Manpower.",
+   "advice": "Public holiday, long weekend."
+  },
+  {
+   "id": "ph-labour-2027",
+   "name": "Labour Day",
+   "kind": "holiday",
+   "dates": [
+    "2027-05-01"
+   ],
+   "window": [
+    0,
+    24
+   ],
+   "places": [],
+   "lift": 1.0,
+   "roadClosures": false,
+   "basis": "Gazetted by the Ministry of Manpower.",
+   "advice": "Public holiday."
+  },
+  {
+   "id": "ph-hrh-2027",
+   "name": "Hari Raya Haji",
+   "kind": "holiday",
+   "dates": [
+    "2027-05-17"
+   ],
+   "window": [
+    0,
+    24
+   ],
+   "places": [],
+   "lift": 1.0,
+   "roadClosures": false,
+   "basis": "Gazetted by the Ministry of Manpower.",
+   "advice": "Public holiday, long weekend."
+  },
+  {
+   "id": "ph-vesak-2027",
+   "name": "Vesak Day",
+   "kind": "holiday",
+   "dates": [
+    "2027-05-20"
+   ],
+   "window": [
+    0,
+    24
+   ],
+   "places": [
+    "Bright Hill",
+    "Toa Payoh"
+   ],
+   "lift": 1.25,
+   "roadClosures": false,
+   "basis": "Gazetted by the Ministry of Manpower.",
+   "advice": "Public holiday. Temples draw crowds through the day."
+  },
+  {
+   "id": "ph-nd-2027",
+   "name": "National Day",
+   "kind": "holiday",
+   "dates": [
+    "2027-08-09"
+   ],
+   "window": [
+    0,
+    24
+   ],
+   "places": [],
+   "lift": 1.0,
+   "roadClosures": false,
+   "basis": "Gazetted by the Ministry of Manpower.",
+   "advice": "Public holiday, long weekend. See the parade entry for closures."
+  },
+  {
+   "id": "ph-deepavali-2027",
+   "name": "Deepavali",
+   "kind": "holiday",
+   "dates": [
+    "2027-10-28"
+   ],
+   "window": [
+    0,
+    24
+   ],
+   "places": [
+    "Little India",
+    "Farrer Park",
+    "Rochor"
+   ],
+   "lift": 1.4,
+   "roadClosures": false,
+   "basis": "Gazetted by the Ministry of Manpower.",
+   "advice": "Public holiday. Little India busy from late afternoon."
+  },
+  {
+   "id": "ph-christmas-2027",
+   "name": "Christmas Day",
+   "kind": "holiday",
+   "dates": [
+    "2027-12-25"
+   ],
+   "window": [
+    0,
+    24
+   ],
+   "places": [
+    "Orchard",
+    "Somerset",
+    "Dhoby Ghaut"
+   ],
+   "lift": 1.35,
+   "roadClosures": false,
+   "basis": "Gazetted by the Ministry of Manpower.",
+   "advice": "Public holiday. Orchard stays busy into the evening."
+  },
+  {
+   "id": "iosconf",
+   "name": "iOS Conf SG 2027",
+   "kind": "fixed",
+   "dates": [
+    "2027-01-20",
+    "2027-01-21",
+    "2027-01-22"
+   ],
+   "window": [
+    8,
+    19
+   ],
+   "places": [],
+   "lift": 1.1,
+   "roadClosures": false,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "Conference."
+  },
+  {
+   "id": "brunomars",
+   "name": "Bruno Mars \u2014 The Romantic Tour",
+   "kind": "fixed",
+   "dates": [
+    "2027-04-13",
+    "2027-04-14",
+    "2027-04-17",
+    "2027-04-18"
+   ],
+   "window": [
+    17,
+    26
+   ],
+   "places": [
+    "Stadium",
+    "Mountbatten",
+    "Nicoll Highway"
+   ],
+   "lift": 2.0,
+   "roadClosures": true,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "National Stadium, four nights. Heavy crowds at Stadium after each show."
+  },
+  {
+   "id": "atxsg",
+   "name": "Asia Tech x Singapore 2027",
+   "kind": "fixed",
+   "dates": [
+    "2027-05-26",
+    "2027-05-27",
+    "2027-05-28"
+   ],
+   "window": [
+    8,
+    19
+   ],
+   "places": [
+    "Bayfront",
+    "Marina Bay"
+   ],
+   "lift": 1.25,
+   "roadClosures": false,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "Marina Bay Sands."
+  },
+  {
+   "id": "pokemon",
+   "name": "Pok\u00e9mon World Championships",
+   "kind": "fixed",
+   "dates": [
+    "2027-08-13",
+    "2027-08-14",
+    "2027-08-15"
+   ],
+   "window": [
+    9,
+    22
+   ],
+   "places": [
+    "Expo",
+    "Tanah Merah",
+    "Stadium"
+   ],
+   "lift": 1.6,
+   "roadClosures": false,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "Singapore Expo and Indoor Stadium. Expo is busy all day across the weekend."
+  },
+  {
+   "id": "superai",
+   "name": "SuperAI 2027",
+   "kind": "fixed",
+   "dates": [
+    "2027-09-08",
+    "2027-09-09"
+   ],
+   "window": [
+    8,
+    19
+   ],
+   "places": [
+    "Bayfront",
+    "Marina Bay"
+   ],
+   "lift": 1.2,
+   "roadClosures": false,
+   "basis": "Date supplied by the team from public announcements; not from an official feed. Verify before relying on it.",
+   "advice": "Conference at Marina Bay."
+  }
+ ]
 }

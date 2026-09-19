@@ -75,6 +75,33 @@ check("answers a walk question", /min/i.test(lastMsg()), lastMsg().slice(0,70));
 check("no fabricated bus number anywhere in chat",
   !/bus\s+\d{2,3}\b/.test(d.querySelector("#chat").textContent));
 
+
+// --- fixes from this round ---
+check("Dates tab exists", !!d.querySelector('[data-pane="cal"]') && !!q("#pane-cal"));
+check("walk minutes are not raw floats", !/\d+\.\d{3,}\s*min/.test(d.body.innerHTML),
+  (d.body.innerHTML.match(/\d+\.\d{3,}\s*min/)||[''])[0]);
+check("chat tracks a pending clarification", "awaiting" in window.CC.state);
+
+
+// --- calendar grid ---
+// jsdom has no fetch, so the app never loads the calendar on its own
+window.CC.loadEvents(JSON.parse(readFileSync("data/events.json","utf8")));
+d.querySelector('[data-pane="cal"]').click();
+await new Promise(r=>setTimeout(r,80));
+const cal=()=>q("#calbody");
+check("calendar renders a month grid", d.querySelectorAll(".calgrid .calday").length>=28,
+  d.querySelectorAll(".calgrid .calday").length+" cells");
+check("seven day-of-week headers", d.querySelectorAll(".caldow").length===7);
+check("month navigation present", !!q("#cal-prev") && !!q("#cal-next") && !!q("#cal-today"));
+check("today is marked", !!d.querySelector(".calday.today"));
+const monthWas=d.querySelector(".calhead h2").textContent;
+q("#cal-next").click(); await new Promise(r=>setTimeout(r,60));
+check("next month changes the heading", d.querySelector(".calhead h2").textContent!==monthWas,
+  monthWas+" -> "+d.querySelector(".calhead h2").textContent);
+q("#cal-today").click(); await new Promise(r=>setTimeout(r,60));
+check("today button returns to this month", d.querySelector(".calhead h2").textContent===monthWas);
+check("undated events still held back", /No date yet/.test(cal().textContent));
+
 console.log(report.join("\n"));
 const fails = report.filter(r=>r.startsWith("  FAIL")).length;
 console.log("\n"+(report.length-fails)+" passed, "+fails+" failed");

@@ -15,7 +15,8 @@ export default async () => {
       lifts:    hasLTA,   // v2/FacilitiesMaintenance
       roads:    hasLTA,   // TrafficIncidents, RoadWorks, TrafficSpeedBands
       weather:  true,     // data.gov.sg is open, no key
-      chat:     Boolean(process.env.ANTHROPIC_API_KEY)
+      chat:     Boolean(process.env.GOOGLE_CLOUD_PROJECT || process.env.ANTHROPIC_API_KEY),
+      chatBackend: process.env.GOOGLE_CLOUD_PROJECT ? "vertex" : (process.env.ANTHROPIC_API_KEY ? "anthropic" : "parser")
     }
   }, { headers: { "cache-control": "no-store" } });
 };

@@ -277,6 +277,53 @@ section{margin:22px 0}
 .watch.alert .dot{background:var(--signal)}
 .watch button{margin-left:auto;background:var(--surface-2);border:1px solid var(--line);
   border-radius:8px;padding:5px 10px;font-size:12px;font-weight:600}
+
+/* ---------- dates ---------- */
+.evt{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  padding:13px 14px;margin-bottom:10px}
+.evt.soon{border-color:var(--signal)}
+.evt.today{border-color:var(--stop)}
+.evt h4{margin:0 0 2px;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
+.evt .when{margin-left:auto;font-size:11.5px;color:var(--muted);font-weight:500;white-space:nowrap}
+.evt p{margin:5px 0 0;font-size:13px;color:var(--muted);line-height:1.5}
+.evt .places{margin-top:8px;display:flex;flex-wrap:wrap;gap:5px}
+.evt .places span{font-size:11px;padding:2px 7px;border-radius:999px;
+  background:var(--surface-2);border:1px solid var(--line);color:var(--muted)}
+.evt .flag{font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;
+  padding:2px 7px;border-radius:4px;background:var(--stop);color:#fff}
+.evt.undated{opacity:.72}
+
+/* ---------- calendar grid ---------- */
+.calhead{display:flex;align-items:center;gap:10px;margin:2px 0 12px}
+.calhead h2{margin:0;font-size:17px;font-weight:600;letter-spacing:-.01em}
+.calnav{margin-left:auto;display:flex;gap:6px}
+.calnav button{width:36px;height:36px;border-radius:9px;background:var(--surface);
+  border:1px solid var(--line);color:var(--text);font-size:15px;line-height:1;
+  display:grid;place-items:center;transition:background .15s ease}
+.calnav button:hover{background:var(--surface-2)}
+.calnav button:active{transform:scale(.94)}
+.calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.caldow{text-align:center;font-size:10.5px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--dim);padding:4px 0 6px}
+.calday{position:relative;aspect-ratio:1;border-radius:9px;background:var(--surface);
+  border:1px solid var(--line);display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:3px;font-size:13.5px;color:var(--text);padding:0;
+  min-height:42px;transition:background .14s ease,border-color .14s ease}
+.calday:hover:not(.pad){background:var(--surface-2)}
+.calday:active:not(.pad){transform:scale(.95)}
+.calday.pad{background:transparent;border-color:transparent;color:var(--dim);opacity:.4}
+.calday.today{border-color:var(--signal);font-weight:700}
+.calday.sel{background:var(--signal);border-color:var(--signal);color:#1A1200;font-weight:700}
+.calday.wknd:not(.sel):not(.pad){color:var(--muted)}
+.caldots{display:flex;gap:2.5px;height:5px;align-items:center}
+.caldots i{width:5px;height:5px;border-radius:50%;background:var(--signal);display:block}
+.caldots i.hol{background:var(--go)}
+.caldots i.road{background:var(--stop)}
+.calday.sel .caldots i{background:#1A1200}
+.calkey{display:flex;flex-wrap:wrap;gap:13px;margin:12px 2px 16px;font-size:11.5px;color:var(--muted)}
+.calkey i{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle}
+.calsel{margin-top:4px}
+.calsel h3{font-size:13px;font-weight:600;margin:0 0 9px;letter-spacing:.01em}
 </style>
 </head>
 <body>
@@ -385,6 +432,10 @@ section{margin:22px 0}
     </section>
   </div>
 
+  <div class="pane" id="pane-cal">
+    <div id="calbody"></div>
+  </div>
+
   <div class="pane" id="pane-src">
     <section>
       <div class="sec-head"><h2>Where the numbers come from</h2><div class="aside" id="mode-label"></div></div>
@@ -405,6 +456,7 @@ section{margin:22px 0}
   <button data-pane="chat" aria-current="true"><b>◍</b>Ask</button>
   <button data-pane="plan"><b>◎</b>Journey</button>
   <button data-pane="live"><b>◈</b>Live<span class="badge" id="nav-badge" hidden>1</span></button>
+  <button data-pane="cal"><b>▤</b>Dates</button>
   <button data-pane="nudge"><b>◔</b>Nudges</button>
   <button data-pane="src"><b>◇</b>Sources</button>
 </div></nav>
@@ -1355,6 +1407,15 @@ function matchPlace(text){
   }
   if(best) return best;
   for(const [k,v] of Object.entries(ALIAS)) if(t.includes(k)) return v;
+  /* Nothing in the 144 rail places matched. Once the real bus network is
+     loaded there are another 5,200 stops that are perfectly valid
+     origins and destinations — "Amber Gardens" is a bus stop, not a
+     station, and refusing it made the app look broken. Rail is still
+     tried first, because a commuter typing "Bedok" means the station. */
+  if(typeof matchBusStop === "function"){
+    const stop = matchBusStop(text);
+    if(stop) return stop;
+  }
   return null;
 }
 
@@ -1653,8 +1714,98 @@ function suggestPlaces(query, extraStops, limit){
 const BUS_IDX = {
   loaded:false, stops:new Map(), services:new Map(),
   routes:new Map(), dists:new Map(), atStop:new Map(),
-  grid:new Map(), edges:0, railJoins:0, builtMs:0, source:null
+  grid:new Map(), edges:0, railJoins:0, builtMs:0, source:null,
+  /* name -> [code]. Built with the rest of the index so a commuter can
+     type "amber gardens" and be understood. Without it matchPlace only
+     ever saw the 144 rail places, and every bus stop in Singapore was
+     unreachable by name. */
+  byName:new Map(), names:[]
 };
+
+/* Stop names are written for a pole, not a search box: "Opp Blk 157A",
+   "Bef Jln Eunos", "Aft Braddell Rd". Strip the positional prefixes so
+   the name the commuter knows is what matches. */
+const STOP_PREFIX = /^(opp|opposite|bef|before|aft|after|bet|between|blk|block)\s+/i;
+/* LTA writes stop names for a pole, not a search box: "Amber Gdns",
+   "Marine Pde Stn", "Bt Batok Int". A commuter types "Amber Gardens".
+   Both are normalised to the same key so either finds the stop. */
+const ABBREV = {
+  gdns:"gardens", gdn:"garden", pde:"parade", stn:"station", rd:"road",
+  ave:"avenue", av:"avenue", st:"street", dr:"drive", cl:"close",
+  cres:"crescent", ter:"terrace", pl:"place", lk:"link", wk:"walk",
+  int:"interchange", ctr:"centre", cte:"centre", cplx:"complex",
+  blk:"block", sch:"school", hosp:"hospital", pk:"park", mkt:"market",
+  bt:"bukit", jln:"jalan", lor:"lorong", tg:"tanjong", kg:"kampong",
+  upp:"upper", nth:"north", sth:"south", est:"estate", ind:"industrial",
+  cmnty:"community", cc:"community club", pri:"primary", sec:"secondary",
+  hts:"heights", gr:"grove", vw:"view", ri:"rise", ctrl:"central",
+  mrt:"station", ns:"north south", ew:"east west"
+};
+function normStopName(s){
+  return String(s||"").toLowerCase()
+    .replace(/[^a-z0-9 ]+/g," ")
+    .replace(/\s+/g," ").trim()
+    .split(" ").map(w => ABBREV[w] || w).join(" ");
+}
+function rawStopName(s){
+  return String(s||"").toLowerCase().replace(/[^a-z0-9 ]+/g," ")
+    .replace(/\s+/g," ").trim();
+}
+function stopNameKeys(name){
+  const full = normStopName(name);
+  /* Both the expanded and the literal form. "Ter" is Terrace in a street
+     name and Terminal at the airport; indexing both means neither
+     reading loses. */
+  const keys = new Set([full, rawStopName(name)]);
+  let stripped = full;
+  while(STOP_PREFIX.test(stripped)) stripped = stripped.replace(STOP_PREFIX,"").trim();
+  if(stripped && stripped !== full) keys.add(stripped);
+  /* "Marine Pde Stn Exit 2" should also answer to "marine pde stn" */
+  const noExit = stripped.replace(/\s+exit\s+\w+$/,"").trim();
+  if(noExit && noExit !== stripped) keys.add(noExit);
+  return [...keys].filter(Boolean);
+}
+
+/* Best matching bus stop for a free-text name, or null. Exact first,
+   then prefix, then containment — never a fuzzy guess, because sending
+   someone to the wrong stop is worse than saying you do not know. */
+function matchBusStop(query){
+  if(!BUS_IDX.loaded) return null;
+  const raw = normStopName(query);
+  /* "opposite amber gardens" is a real, different stop from "amber
+     gardens" — the other side of the road. Honour it when the pair
+     exists rather than quietly sending them across the street. */
+  const wantsOpp = /^(opp|opposite)\s+/.test(raw);
+  const q = raw.replace(/^(opp|opposite)\s+/,"").trim();
+  if(q.length < 3) return null;
+  if(wantsOpp){
+    const opp = BUS_IDX.byName.get("opp " + q) || BUS_IDX.byName.get("opposite " + q);
+    if(opp && opp.length) return opp[0];
+  }
+  const hit = BUS_IDX.byName.get(q) || BUS_IDX.byName.get(raw);
+  if(hit && hit.length) return hit[0];
+  let best=null, bestLen=Infinity;
+  for(const [name, codes] of BUS_IDX.byName){
+    if(name.length >= bestLen) continue;
+    if(name.startsWith(q) || q.startsWith(name) || name.includes(q)){
+      best = codes[0]; bestLen = name.length;
+    }
+  }
+  return best;
+}
+function searchBusStops(query, limit){
+  if(!BUS_IDX.loaded) return [];
+  const q = normStopName(query);
+  if(q.length < 2) return [];
+  const out=[];
+  for(const [name, codes] of BUS_IDX.byName){
+    if(name.startsWith(q)) out.push({code:codes[0], name, score:0});
+    else if(name.includes(q)) out.push({code:codes[0], name, score:1});
+    if(out.length > 400) break;
+  }
+  out.sort((a,b)=>a.score-b.score || a.name.length-b.name.length);
+  return out.slice(0, limit||8);
+}
 
 /* ---- spatial index ------------------------------------------
    A flat grid. Singapore is 50 km across and we only ever ask for
@@ -1748,6 +1899,10 @@ function loadBusIndex(data, opts){
     // A few rows carry 0,0. Dropping them beats plotting the Gulf of Guinea.
     if(!isFinite(la) || !isFinite(lo) || (la===0 && lo===0)){ dropped++; continue; }
     BUS_IDX.stops.set(code, {n:s.n||code, r:s.r||"", la, lo});
+    for(const k of stopNameKeys(s.n||code)){
+      if(!BUS_IDX.byName.has(k)) BUS_IDX.byName.set(k, []);
+      BUS_IDX.byName.get(k).push(code);
+    }
     gridPut(code, la, lo);
   }
   for(const [no, meta] of Object.entries(data.services||{})) BUS_IDX.services.set(no, meta);
@@ -2132,7 +2287,7 @@ const trafficWord=t=>t<1.1?"Clear":t<1.3?"Moderate":t<1.5?"Heavy":"Very heavy";
 const state={from:"Punggol",to:"Raffles Place",depart:0,prefs:new Set(),
   modes:{rail:true,bus:true},maxTransferWalk:null,avoidLines:[],plan:null,
   walkStart:6,walkEnd:5,filter:"all",
-  options:[],choiceIdx:0,chosen:null,watch:null};
+  awaiting:null,options:[],choiceIdx:0,chosen:null,watch:null};
 
 function tickClock(){
   $("#clock").textContent=hhmm(nowMinutes());
@@ -2170,12 +2325,17 @@ function suggestions(){
 async function interpret(text){
   if(LIVE.on&&LIVE.caps.chat){
     try{
-      const r=await fetch("/.netlify/functions/chat",{
+      const r=await fetch("/api/chat",{
         method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({message:text,now:nowMinutes(),
-          context:{from:state.from,to:state.to,prefs:[...state.prefs]}})});
+          history:MSGS.slice(-6).filter(m=>m.who!=="card")
+                 .map(m=>({who:m.who,text:String(m.html).replace(/<[^>]+>/g,"").slice(0,240)})),
+          context:groundingContext()})});
       if(r.ok){
         const j=await r.json();
+        /* The model can answer as well as plan. An answer is prose and
+           is shown as-is — nothing is re-planned, nothing reprinted. */
+        if(j&&j.mode==="answer"&&j.reply) return {answered:true,reply:j.reply};
         if(j&&j.intent){
           const i=j.intent;
           return {from:matchPlace(i.from||"")||null,to:matchPlace(i.to||"")||null,
@@ -2192,120 +2352,204 @@ async function interpret(text){
   return parseIntent(text,nowMinutes());
 }
 
-/* ═══════════ FOLLOW-UP QUESTIONS ═══════════
-   The old behaviour re-planned on every message and printed the same
-   route card again, so "what bus is this" and "why not bus 36" both
-   produced a wall of itinerary. A follow-up about the plan you are
-   already looking at should be answered, not re-answered with the
-   whole journey. This runs before any re-planning and returns true if
-   it handled the message. */
+/* What the model is allowed to reason from — all of it this app's own
+   state, so any answer can be checked against what the screen shows. */
+function groundingContext(){
+  const p=state.plan;
+  return {
+    from:state.from, to:state.to, prefs:[...state.prefs],
+    busDataLoaded:(typeof BUS_IDX!=="undefined")&&BUS_IDX.loaded,
+    crowdLive:!!(LIVE.caps&&LIVE.caps.crowd),
+    alerts:FEED.filter(d=>d.active).slice(0,6)
+      .map(d=>({headline:d.headline,line:d.line||null,severity:d.severity})),
+    plan:p?{
+      from:p.from,to:p.to,total:p.total,changes:p.changes??p.transfers,
+      depart:p.depart,arrive:p.depart+p.total,
+      legs:p.legs.map(l=>({
+        kind:l.kind,mode:l.mode,line:l.line,at:l.at,phase:l.phase,
+        lineName:l.line&&LINES[l.line]?LINES[l.line].name:null,
+        service:l.service||null,
+        from:l.from,to:l.to,mins:l.mins
+      }))
+    }:null
+  };
+}
+
+
+/* ═══════════ LOCAL FOLLOW-UPS ═══════════
+   The fallback when no model is configured. Answers common questions
+   about the plan on screen instead of re-planning and reprinting the
+   whole itinerary. Returns true if it handled the message. */
 function answerFollowUp(text){
   const t=text.toLowerCase().trim();
   const p=state.plan;
   if(!p) return false;
-
   const busLegs=p.legs.filter(l=>l.kind==="ride"&&l.mode==="bus");
   const railLegs=p.legs.filter(l=>l.kind==="ride"&&l.mode==="rail");
 
-  /* "why not bus 36" / "why not the NE line" */
-  const svc=t.match(/\b(?:why not|what about|can i take|could i take)\b.*?\bbus\s*(\w{1,4})\b/);
-  if(svc){
-    const n=svc[1].toUpperCase();
-    if(!BUS_DATA.loaded){
-      say("cc",`I can't answer that honestly yet. This build knows bus <i>corridors</i> —
-        which roads buses run along and roughly how long they take — but not individual
-        service numbers, so I don't know where the ${esc(n)} goes.
-        <br><br>Once the DataMall bus data is loaded I'll be able to tell you whether the
-        ${esc(n)} serves your stops and what it would cost you in time.
-        <br><br>Right now I can tell you the <b>stops</b>: ${busLegs.length
-          ? busLegs.map(l=>`<b>${esc(l.from)}</b> to <b>${esc(l.to)}</b>`).join(", ")
-          : "your route has no bus legs"}.`);
-      return true;
-    }
-    return answerRealBus(n);
-  }
-
-  /* "what bus is this" / "which bus" / "what bus do i take" */
-  if(/\b(what|which)\b.*\bbus\b/.test(t) || /\bbus (number|no|service)\b/.test(t)){
+  if(/\b(what|which)\b.*\bbus\b/.test(t)||/\bbus (number|no|service)\b/.test(t)){
     if(!busLegs.length){
-      say("cc",`No buses on this one — it's ${railLegs.length===1?"a single train":"all rail"}.
-        ${railLegs.map(l=>`<b>${esc(LINES[l.line]?LINES[l.line].short:l.line)}</b> from
-        <b>${esc(l.from)}</b> to <b>${esc(l.to)}</b>`).join(", then ")}.`);
+      say("cc",`No buses on this one. ${railLegs.map(l=>`<b>${esc(LINES[l.line]?LINES[l.line].short:l.line)}</b>
+        from <b>${esc(l.from)}</b> to <b>${esc(l.to)}</b>`).join(", then ")}.`);
       return true;
     }
-    if(!BUS_DATA.loaded){
-      say("cc",`Honest answer: I don't know the service number.
-        <br><br>This build models bus <i>corridors</i>, not services — I know a bus runs
-        ${busLegs.map(l=>`<b>${esc(l.from)}</b> to <b>${esc(l.to)}</b> in about ${Math.round(l.mins)} min`).join(", and ")},
-        and I know the road and the traffic on it, but not which number to look for.
-        <br><br>I'd rather say that than invent one. Check the stop pole or SimplyGo for the
-        number; the timing I've given you is still right.`);
-      return true;
-    }
-    return answerRealBus(null);
+    say("cc",busLegs.map(l=>l.service
+      ? `<b>Bus ${esc(l.service)}</b> from ${esc(busStopLabel?busStopLabel(l.from):l.from)} to ${esc(busStopLabel?busStopLabel(l.to):l.to)}`
+      : `${esc(l.from)} to ${esc(l.to)} — service number not available`).join("<br>"));
+    return true;
   }
 
-  /* "where is the bus stop" / "which stop" */
   if(/\b(where|which)\b.*\b(stop|board|catch|get on|pick)\b/.test(t)){
     const first=p.legs.find(l=>l.kind==="ride");
     if(first){
-      const code=codeOf(first.from);
-      say("cc",`Board at <b>${esc(first.from)}</b>${code?` (${esc(code)})`:""},
-        ${Math.round(p.legs[0].mins)} min walk from where you are.
-        ${first.mode==="bus"?"It's the stop on the main road, not the interchange bay.":""}`);
+      say("cc",`Board at <b>${esc(busStopLabel?busStopLabel(first.from):first.from)}</b>,
+        about ${fmtMins(p.legs[0].mins)} walk from here.`);
       return true;
     }
   }
 
-  /* "how long is the walk" */
   if(/\bwalk/.test(t)&&/\b(how (long|far|much)|total)\b/.test(t)){
-    const a=p.legs.find(l=>l.kind==="walk"&&l.phase==="access");
-    const e=p.legs.find(l=>l.kind==="walk"&&l.phase==="egress");
-    say("cc",`About <b>${Math.round(p.walkMins)} min</b> of walking all in:
-      ${a?Math.round(a.mins)+" min at the start":""}${a&&e?", ":""}${e?Math.round(e.mins)+" min at the end":""}${p.transferWalk>0.5?`, and ${Math.round(p.transferWalk)} min changing`:""}.`);
+    say("cc",`About <b>${fmtMins(p.walkMins)}</b> of walking in total.`);
     return true;
   }
 
-  /* "is it crowded" */
   if(/\b(crowd|packed|busy|full|seat)\b/.test(t)&&!/\bavoid\b/.test(t)){
-    const peak=Math.max(0,...p.legs.filter(l=>l.kind==="ride").map(l=>l.crowd||0));
     const worst=p.legs.filter(l=>l.kind==="ride").sort((a,b)=>(b.crowd||0)-(a.crowd||0))[0];
-    say("cc",`Busiest stretch is <b>${esc(crowdWord(peak).toLowerCase())}</b>${worst?` —
-      ${esc(worst.from)} to ${esc(worst.to)}`:""}.
-      <span class="dim">Estimated from ridership patterns, not a live count.</span>
-      ${state.prefs.has("quiet")?"":"<br><br>Want me to find a quieter way, even if it's slower?"}`);
+    say("cc",`Busiest stretch is <b>${esc(crowdWord(worst?worst.crowd||0:0).toLowerCase())}</b>${worst?`
+      — ${esc(worst.from)} to ${esc(worst.to)}`:""}.
+      <span class="dim">Estimated, not a live count.</span>`);
     return true;
   }
 
-  /* "when should i leave" */
   if(/\b(when|what time)\b.*\b(leave|go|set off|start)\b/.test(t)){
-    say("cc",`Leave by <b>${hhmm(p.depart)}</b> to arrive around <b>${hhmm(p.arrive)}</b>.`);
+    say("cc",`Leave by <b>${hhmm(p.depart)}</b> to arrive around <b>${hhmm(p.depart+p.total)}</b>.`);
     return true;
   }
-
   return false;
 }
 
-/* Once real DataMall bus data is present, these become real answers. */
-const BUS_DATA={loaded:false,index:null};
-function answerRealBus(wanted){
-  const p=state.plan, idx=BUS_DATA.index;
-  const legs=p.legs.filter(l=>l.kind==="ride"&&l.mode==="bus");
-  if(!legs.length){ say("cc","No bus legs on this route."); return true; }
-  const lines=legs.map(l=>{
-    const svcs=(l.services||[]).slice(0,4);
-    return `<b>${esc(l.from)}</b> to <b>${esc(l.to)}</b>: ${
-      svcs.length?"bus "+svcs.map(esc).join(", "):"service number unavailable"}`;
-  });
-  if(wanted){
-    const serves=legs.some(l=>(l.services||[]).includes(wanted));
-    say("cc",serves
-      ? `Yes — the ${esc(wanted)} does serve that stretch. ${lines.join("<br>")}`
-      : `The ${esc(wanted)} doesn't call at both your stops, so it won't help here.<br>${lines.join("<br>")}`);
-  } else {
-    say("cc",lines.join("<br>"));
+/* ═══════════ DATES ═══════════
+   The days a commuter would want to know about in advance: events that
+   close roads or fill stations, and the ones whose date nobody has
+   filled in yet.
+
+   The honesty matters here more than the feature. There is no official
+   event-crowding API, so data/events.json is a curated file. Events on
+   a lunar or Islamic calendar ship with no date and are NOT applied to
+   any prediction — they are listed separately, marked as awaiting a
+   date, rather than being silently guessed at. */
+let CAL_MONTH=null, CAL_SEL=null;
+
+function isoOf(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+
+/* Every dated entry, indexed by day, so a month renders in one pass
+   rather than re-scanning the event list 42 times. */
+function eventsByDay(){
+  const map=new Map();
+  if(!EVENTS.loaded) return map;
+  for(const ev of EVENTS.dated)
+    for(const d of ev.dates){
+      if(!map.has(d)) map.set(d,[]);
+      map.get(d).push(ev);
+    }
+  return map;
+}
+
+function renderCalendar(){
+  const box=$("#calbody"); if(!box) return;
+  if(!EVENTS.loaded){ box.innerHTML=`<p class="empty">Event calendar not loaded.</p>`; return; }
+
+  const now=new Date(), todayIso=isoOf(now);
+  if(!CAL_MONTH) CAL_MONTH=new Date(now.getFullYear(),now.getMonth(),1);
+  const byDay=eventsByDay();
+
+  const y=CAL_MONTH.getFullYear(), mo=CAL_MONTH.getMonth();
+  const monthName=CAL_MONTH.toLocaleDateString(undefined,{month:"long",year:"numeric"});
+  const first=new Date(y,mo,1), daysIn=new Date(y,mo+1,0).getDate();
+  /* Monday-first, which is how a Singapore week is read. */
+  const lead=(first.getDay()+6)%7;
+  const prevDays=new Date(y,mo,0).getDate();
+
+  const cells=[];
+  for(let i=lead-1;i>=0;i--) cells.push({d:prevDays-i,pad:true,iso:isoOf(new Date(y,mo-1,prevDays-i))});
+  for(let d=1;d<=daysIn;d++)  cells.push({d,pad:false,iso:isoOf(new Date(y,mo,d))});
+  while(cells.length%7) { const n=cells.length-lead-daysIn+1; cells.push({d:n,pad:true,iso:isoOf(new Date(y,mo+1,n))}); }
+
+  const dow=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  const grid=cells.map((c,i)=>{
+    const evs=byDay.get(c.iso)||[];
+    const wknd=i%7>=5;
+    const cls=["calday"];
+    if(c.pad) cls.push("pad");
+    if(c.iso===todayIso) cls.push("today");
+    if(c.iso===CAL_SEL) cls.push("sel");
+    if(wknd) cls.push("wknd");
+    const dots=evs.slice(0,3).map(e=>
+      `<i class="${e.kind==="holiday"?"hol":(e.roadClosures?"road":"")}"></i>`).join("");
+    return `<button class="${cls.join(" ")}" data-day="${c.iso}"
+      ${evs.length?`aria-label="${esc(c.d+" "+monthName+", "+evs.length+" event"+(evs.length>1?"s":""))}"`:""}>
+      <span>${c.d}</span><span class="caldots">${dots}</span></button>`;
+  }).join("");
+
+  const sel=CAL_SEL||todayIso;
+  const selEvents=byDay.get(sel)||[];
+  const selDate=new Date(sel+"T00:00:00");
+  const selLabel=selDate.toLocaleDateString(undefined,{weekday:"long",day:"numeric",month:"long"});
+
+  const evCard=ev=>`<div class="evt ${ev.kind==="holiday"?"":"soon"}">
+    <h4>${esc(ev.name)}${ev.roadClosures?`<span class="flag">roads</span>`:""}
+      ${ev.kind==="holiday"?`<span class="codechip">public holiday</span>`:""}</h4>
+    ${ev.advice?`<p>${esc(ev.advice)}</p>`:""}
+    ${ev.places&&ev.places.length?`<div class="places">${
+      ev.places.slice(0,8).map(p=>`<span>${esc(p)}</span>`).join("")}</div>`:""}
+    ${ev.basis?`<p class="small dim" style="margin-top:7px">${esc(ev.basis)}</p>`:""}
+  </div>`;
+
+  let html=`
+    <div class="calhead">
+      <h2>${esc(monthName)}</h2>
+      <div class="calnav">
+        <button id="cal-prev" aria-label="Previous month">‹</button>
+        <button id="cal-today" aria-label="This month" style="width:auto;padding:0 11px;font-size:12.5px;font-weight:600">Today</button>
+        <button id="cal-next" aria-label="Next month">›</button>
+      </div>
+    </div>
+    <div class="calgrid">${dow.map(d=>`<div class="caldow">${d}</div>`).join("")}${grid}</div>
+    <div class="calkey">
+      <span><i style="background:var(--go)"></i>Public holiday</span>
+      <span><i style="background:var(--signal)"></i>Event</span>
+      <span><i style="background:var(--stop)"></i>Road closures</span>
+    </div>
+    <section class="calsel">
+      <h3>${esc(selLabel)}</h3>
+      ${selEvents.length?selEvents.map(evCard).join("")
+        :`<p class="empty" style="padding:16px">Nothing on. An ordinary travelling day.</p>`}
+    </section>`;
+
+  if(EVENTS.undated.length){
+    html+=`<section><div class="sec-head"><h2>No date yet</h2></div>
+      <p class="small dim" style="margin:0 0 10px 2px">These are gazetted annually or follow a
+      lunar or Islamic calendar. Until a date is filled in they are listed here and are
+      <b>not</b> applied to any crowd prediction — a guessed date is worse than a gap.</p>
+      ${EVENTS.undated.map(ev=>`<div class="evt undated">
+        <h4>${esc(ev.name)}${ev.kind==="holiday"?`<span class="codechip">public holiday</span>`:""}
+          <span class="when">date not set</span></h4>
+        ${ev.advice?`<p>${esc(ev.advice)}</p>`:""}
+      </div>`).join("")}</section>`;
   }
-  return true;
+
+  box.innerHTML=html;
+
+  $$("[data-day]").forEach(b=>b.onclick=()=>{
+    CAL_SEL=b.dataset.day;
+    const d=new Date(CAL_SEL+"T00:00:00");
+    if(d.getMonth()!==CAL_MONTH.getMonth()) CAL_MONTH=new Date(d.getFullYear(),d.getMonth(),1);
+    renderCalendar();
+  });
+  const step=n=>{ CAL_MONTH=new Date(CAL_MONTH.getFullYear(),CAL_MONTH.getMonth()+n,1); renderCalendar(); };
+  $("#cal-prev").onclick=()=>step(-1);
+  $("#cal-next").onclick=()=>step(1);
+  $("#cal-today").onclick=()=>{ CAL_MONTH=new Date(now.getFullYear(),now.getMonth(),1); CAL_SEL=todayIso; renderCalendar(); };
 }
 
 async function handleSay(){
@@ -2317,22 +2561,57 @@ async function handleSay(){
 
   /* A question about the plan on screen is answered directly. Only
      an actual new journey request goes through the router. */
-  if(answerFollowUp(text)){ MSGS.pop(); return; }
+  if(!(LIVE.on&&LIVE.caps.chat)&&answerFollowUp(text)){ MSGS.pop(); return; }
 
   const intent=await interpret(text);
   MSGS.pop();   // drop the thinking bubble
 
-  const carryOver=!intent.from&&!intent.to&&state.plan;
+  /* The model answered rather than planned. Show it and stop. */
+  if(intent&&intent.answered){ say("cc",esc(intent.reply).replace(/\n/g,"<br>")); return; }
+
+  /* If the last thing we did was ask for the missing half of a
+     journey, this message is the answer to that question. Without this
+     the reply fell through to the carry-over below and silently
+     re-planned the PREVIOUS trip, which is how "Amber Gardens to
+     Changi" came back as Punggol to Bugis. */
+  if(state.awaiting){
+    const guess=matchPlace(text);
+    if(guess){
+      if(state.awaiting.need==="from"){ intent.from=guess; intent.to=state.awaiting.to; }
+      else { intent.to=guess; intent.from=state.awaiting.from; }
+      state.awaiting=null;
+    } else {
+      say("cc",`I don't know a station or bus stop called <b>${esc(text)}</b>.
+        Try the name on the bus stop pole, a five-digit stop code, or an MRT code like <b>NE17</b>.`);
+      return;   // keep awaiting; do not fall through to the old journey
+    }
+  }
+
+  /* Only carry the previous journey forward when the message genuinely
+     named no place at all — a follow-up like "make it bus only". If the
+     commuter typed a place we could not resolve, say so. Reusing the
+     last trip in that case is worse than admitting ignorance: it looks
+     like the app answered, and it answered the wrong question. */
+  const namedSomething=/\b(to|from|at)\b/i.test(text)||text.trim().split(/\s+/).length>=2;
+  const carryOver=!intent.from&&!intent.to&&state.plan&&!namedSomething;
   if(carryOver){ intent.from=state.plan.from; intent.to=state.plan.to; }
 
+  if(!intent.from&&!intent.to&&namedSomething){
+    say("cc",`I couldn't place that. Give me a station, a bus stop name as written on the pole,
+      or a five-digit stop code — for example <b>Amber Gdns</b>, <b>92241</b> or <b>NE17</b>.`);
+    return;
+  }
   if(!intent.to){
-    say("cc","I didn't catch a destination. Try a station name or its code, like <b>Dhoby Ghaut</b> or <b>NS24</b>.");
+    state.awaiting={need:"to",from:intent.from};
+    say("cc",`Where are you heading? I've got <b>${esc(busStopLabel?busStopLabel(intent.from):intent.from)}</b> as the start.`);
     return;
   }
   if(!intent.from){
-    say("cc",`Where are you starting from? I've got <b>${esc(intent.to)}</b> as the destination.`);
+    state.awaiting={need:"from",to:intent.to};
+    say("cc",`Where are you starting from? I've got <b>${esc(busStopLabel?busStopLabel(intent.to):intent.to)}</b> as the destination.`);
     return;
   }
+  state.awaiting=null;
 
   /* merge into state */
   state.from=intent.from; state.to=intent.to;
@@ -2463,6 +2742,15 @@ function planCard(p,compact){
     <div class="ribbon">${body}</div>${alts}`;
 }
 
+/* Journey times are a model, not a stopwatch. Printing 2.75 min
+   implies a precision we do not have and reads as a bug, because it is
+   one. Under a minute says "less than a minute" rather than "0 min". */
+function fmtMins(m){
+  if(!Number.isFinite(m)) return "—";
+  if(m < 1) return "under a minute";
+  return Math.round(m) + " min";
+}
+
 function walkRow(w){
   let note="";
   if(w.exposure>.35) note=`<div class="legnote rain">${Math.round(w.rain*100)}% chance of rain and only
@@ -2472,7 +2760,7 @@ function walkRow(w){
     <div class="spine"><div class="rail walkrail"></div><div class="node" style="--linecol:var(--dim)"></div></div>
     <div class="legbody"><div class="legttl">Walk ${w.isStart?"to":"from"} ${esc(
       isBusStop(w.at)?busStopLabel(w.at):w.at)}</div>
-      <div class="legsub">${w.mins} min${w.isStart?" — leave by "+hhmm(w.start):""}</div>${note}</div></div>`;
+      <div class="legsub">${fmtMins(w.mins)}${w.isStart?" — leave by "+hhmm(w.start):""}</div>${note}</div></div>`;
 }
 
 function meter(val,label,hotAbove){
@@ -2843,7 +3131,7 @@ function renderSources(){
     {n:"Journey assistant",s:live&&LIVE.caps.chat?"Claude via serverless function":"Built-in parser",
      st:live&&LIVE.caps.chat?"Live":"Offline",tone:"",
      d:live&&LIVE.caps.chat?"Natural language is interpreted by the model and returned as a constraint object the router understands."
-       :"Constraints are extracted by a rule-based parser that needs no API key. Deploy with ANTHROPIC_API_KEY set to upgrade this in place."}
+       :"Constraints are extracted by a rule-based parser that needs no API key. Set GOOGLE_CLOUD_PROJECT on the deploy to upgrade this to Vertex AI Gemini in place — Cloud Run authenticates through its own service account, so there is no key to store."}
   ];
   $("#sources").innerHTML=S.map(s=>`<div class="row"><span class="tick ${s.tone}"></span>
     <div class="body"><div class="ttl">${esc(s.n)}</div>
@@ -3133,6 +3421,7 @@ function init(){
     b.setAttribute("aria-current","true");
     $$(".pane").forEach(p=>p.classList.remove("on"));
     $("#pane-"+b.dataset.pane).classList.add("on");
+    if(b.dataset.pane==="cal") renderCalendar();
     $("#composer").style.display=b.dataset.pane==="chat"?"":"none";
     document.body.style.paddingBottom=b.dataset.pane==="chat"?"150px":"86px";
     window.scrollTo({top:0});
@@ -3209,9 +3498,10 @@ function restore(){
 /* A deliberate handle on the running app: lets the test harness drive
    real journeys against the real DOM, and lets a judge inspect any
    number the interface shows. Read-only by convention. */
-window.CC={state,FEED,LINES,COORD,LANDMARKS,PLACES,
+window.CC={state,FEED,LINES,COORD,LANDMARKS,PLACES,EVENTS,
   route,planBoth,suggestPlaces,busImpact,corridorsForRoad,estimateFare,
   replan,renderResult,applyTheme,themeNow,drawMap,toggleWatch,checkWatch,
+  renderCalendar,loadEvents,matchPlace,matchBusStop,
   get options(){return state.options;}, get plan(){return state.plan;}};
 
 /* ── the real bus network ──────────────────────────────────────────
