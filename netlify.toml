@@ -1,0 +1,31 @@
+# Netlify configuration — Commuter Companion
+#
+# Deploy:  drag this folder onto app.netlify.com/drop
+#      or: netlify deploy --prod
+#
+# Optional environment variables (Site settings → Environment variables):
+#   LTA_ACCOUNT_KEY    — from datamall.lta.gov.sg, enables live bus and traffic data
+#   ANTHROPIC_API_KEY  — enables the LLM journey assistant
+#
+# Neither is required. Without them the app runs on its embedded
+# snapshot and the built-in parser, and says so in the Sources tab.
+
+[build]
+  publish    = "."
+  functions  = "netlify/functions"
+  command    = "node build.js"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options        = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy        = "strict-origin-when-cross-origin"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
