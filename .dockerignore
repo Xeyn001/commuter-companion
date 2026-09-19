@@ -1,0 +1,17 @@
+# Used when you run `docker build` yourself. Cloud Build filters by
+# .gcloudignore instead, so keep the two in step.
+.git/
+node_modules/
+.env
+.engine-bundle.mjs
+*.md
+
+# Tests do not belong in a runtime image.
+test.mjs
+domtest.mjs
+
+# Raw DataMall pulls. bus-index.json is derived from these and is the
+# only one the app reads; shipping all four would add 7 MB for nothing.
+data/bus-routes.json
+data/bus-stops.json
+data/bus-services.json

@@ -108,11 +108,50 @@ for (const s of stops) {
   };
 }
 
+/* BusServices is per service AND direction, and carries two things the
+   router needs that nothing else provides:
+
+     frequency  "8-12" minutes, per peak/offpeak band — the real expected
+                wait, instead of a figure we made up
+     first/last bus times per day type — so the app never routes someone
+                onto a service that stopped running an hour ago
+
+   Keyed service:direction to match BusRoutes. */
+const parseBand = b => {
+  const m = /^(\d+)\s*-\s*(\d+)$/.exec(String(b || "").trim());
+  if (m) return [+m[1], +m[2]];
+  const one = /^(\d+)$/.exec(String(b || "").trim());
+  return one ? [+one[1], +one[1]] : null;
+};
+/* "0530" -> 330 minutes past midnight. "-" and "" mean not running. */
+const parseClock = t => {
+  const s = String(t || "").trim();
+  if (!/^\d{4}$/.test(s)) return null;
+  return (+s.slice(0, 2) % 24) * 60 + (+s.slice(2));
+};
+
 const svcMeta = {};
 for (const s of services) {
-  const k = String(s.ServiceNo || "").trim();
-  if (!k) continue;
-  svcMeta[k] = { op: s.Operator || "", cat: s.Category || "" };
+  const no = String(s.ServiceNo || "").trim();
+  if (!no) continue;
+  const key = no + ":" + s.Direction;
+  svcMeta[key] = {
+    op: s.Operator || "",
+    cat: s.Category || "",
+    freq: {
+      amPeak: parseBand(s.AM_Peak_Freq), amOff: parseBand(s.AM_Offpeak_Freq),
+      pmPeak: parseBand(s.PM_Peak_Freq), pmOff: parseBand(s.PM_Offpeak_Freq)
+    },
+    hours: {
+      wd:  [parseClock(s.WD_FirstBus),  parseClock(s.WD_LastBus)],
+      sat: [parseClock(s.SAT_FirstBus), parseClock(s.SAT_LastBus)],
+      sun: [parseClock(s.SUN_FirstBus), parseClock(s.SUN_LastBus)]
+    },
+    loop: s.LoopDesc || ""
+  };
+  /* Keep a plain service-number entry too, so anything that only knows
+     the number (the /api/bus responses, the interface) still resolves. */
+  if (!svcMeta[no]) svcMeta[no] = { op: s.Operator || "", cat: s.Category || "" };
 }
 
 writeFileSync("data/bus-index.json", JSON.stringify({
@@ -133,6 +172,8 @@ console.log(`
   distinct service-directions ${byService.size}
 
   written to ./data/ — bus-index.json is the one the app loads.
+  frequency bands and first/last bus times are included, so the app
+  uses published headways rather than modelled waits.
   Commit all four. None of them contains your key.
 `);
 

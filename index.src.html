@@ -331,6 +331,7 @@ section{margin:22px 0}
         <span><i style="background:var(--muted);opacity:.65"></i>The other option</span>
       </div>
     </section>
+    <div id="eventbanner"></div>
     <div id="result"></div>
   </div>
 
@@ -454,7 +455,14 @@ function touchesPlan(inc,plan){
   if(!plan) return false;
   return plan.legs.some(l=>{
     if(l.kind==="transfer") return inc.kind==="lift"&&inc.station===l.at;
-    if(l.mode==="bus") return inc.kind==="road"&&inc.corridor===l.line;
+    /* Walking legs carry no stop list, and neither does a wait. Only a
+       ride has stops to test against. */
+    if(l.kind!=="ride"||!Array.isArray(l.stops)) return false;
+    if(l.mode==="bus"){
+      /* A real service is not on a modelled corridor, so corridor-keyed
+         road incidents cannot apply to it. */
+      return !l.real && inc.kind==="road" && inc.corridor===l.line;
+    }
     for(let i=0;i<l.stops.length-1;i++)
       if(inc.line===l.line&&railHit(inc,l.line,l.stops[i],l.stops[i+1])) return true;
     return false;
@@ -846,7 +854,8 @@ function walkRow(w){
   else if(w.rain>.4) note=`<div class="legnote rain">${esc(w.text)} around now, but this walk is mostly sheltered.</div>`;
   return `<div class="leg"><div class="t">${hhmm(w.start)}</div>
     <div class="spine"><div class="rail walkrail"></div><div class="node" style="--linecol:var(--dim)"></div></div>
-    <div class="legbody"><div class="legttl">Walk ${w.isStart?"to":"from"} ${esc(w.at)}</div>
+    <div class="legbody"><div class="legttl">Walk ${w.isStart?"to":"from"} ${esc(
+      isBusStop(w.at)?busStopLabel(w.at):w.at)}</div>
       <div class="legsub">${w.mins} min${w.isStart?" — leave by "+hhmm(w.start):""}</div>${note}</div></div>`;
 }
 
@@ -862,18 +871,39 @@ function legRow(l){
     const toBus=l.mode==="bus";
     return `<div class="leg"><div class="t">${hhmm(l.start)}</div>
       <div class="spine"><div class="rail walkrail"></div><div class="node" style="--linecol:var(--dim)"></div></div>
-      <div class="legbody"><div class="legttl">${toBus?"Walk to the bus stop at":"Change at"} ${esc(l.at)}</div>
-        <div class="legsub">${Math.round(l.mins)} min${toBus?"":" walk to the "+esc(LINES[l.line]?.short||"")+" platform"}</div>
+      <div class="legbody"><div class="legttl">${l.wait
+          ? `Wait for bus ${esc(l.service||"")}`
+          : `${toBus?"Walk to the bus stop at":"Change at"} ${esc(isBusStop(l.at)?busStopLabel(l.at):l.at)}`}</div>
+        <div class="legsub">${Math.round(l.mins)} min${l.wait
+          ?(l.waitSource==="published"?" expected wait, from the published headway"
+                                      :" typical wait at this time (estimated)")
+          :toBus?"":" walk to the "+esc(LINES[l.line]?.short||"")+" platform"}</div>
         ${stepfree?`<div class="legnote">Step-free adds ${stepfree} min here — the lifts sit at opposite ends of the concourse.</div>`:""}
       </div></div>`;
   }
   if(l.mode==="bus"){
     const c=BUS_CORRIDORS[l.line], n=l.stops.length-1;
     const issue=l.issues&&l.issues[0];
+    /* A real service from DataMall: name it, and name the stops. */
+    if(l.real && l.service){
+      const also=servicesAt(l.from).filter(s=>s!==l.service);
+      const op=(BUS_IDX.services.get(l.service)||{}).op;
+      return `<div class="leg"><div class="t">${hhmm(l.start)}</div>
+        <div class="spine"><div class="rail busrail"></div><div class="node" style="--linecol:var(--bus)"></div></div>
+        <div class="legbody">
+          <div class="legttl">Bus ${esc(l.service)}${op?` <span class="code">${esc(op)}</span>`:""}</div>
+          <div class="legsub">${esc(busStopName(l.from))} <span class="code">${esc(l.from)}</span>
+            to ${esc(busStopName(l.to))} <span class="code">${esc(l.to)}</span>
+            — ${n} stop${n>1?"s":""}, ${Math.round(l.mins)} min</div>
+          <div class="meters">${meter(l.crowd,crowdWord(l.crowd)+" (estimated)")}
+            ${meter(Math.min(1,(l.traffic-1)/0.7),"Traffic "+trafficWord(l.traffic).toLowerCase(),.6)}</div>
+          ${also.length?`<div class="legnote">Also from this stop: ${esc(also.slice(0,6).join(", "))}${also.length>6?" and more":""}.</div>`:""}
+        </div></div>`;
+    }
     return `<div class="leg"><div class="t">${hhmm(l.start)}</div>
       <div class="spine"><div class="rail busrail"></div><div class="node" style="--linecol:var(--bus)"></div></div>
       <div class="legbody">
-        <div class="legttl">Bus along ${esc(c.name)}</div>
+        <div class="legttl">Bus along ${esc(c?c.name:"corridor")}</div>
         <div class="legsub">${esc(l.from)} to ${esc(l.to)} — ${n} stop${n>1?"s":""}, ${Math.round(l.mins)} min
           <span class="code">check the app for the service number</span></div>
         <div class="meters">${meter(l.crowd,crowdWord(l.crowd)+" (estimated)")}
@@ -890,7 +920,8 @@ function legRow(l){
       <div class="legttl">${esc(L.name)}</div>
       <div class="legsub">${esc(l.from)} <span class="code">${esc(fc)}</span> to ${esc(l.to)}
         <span class="code">${esc(tc)}</span> — ${n} stop${n>1?"s":""}, ${Math.round(l.mins)} min</div>
-      <div class="meters">${meter(l.crowd,crowdWord(l.crowd)+" (estimated)")}</div>
+      <div class="meters">${meter(l.crowd,crowdWord(l.crowd)+" "+crowdProvenance(l))}</div>
+      ${eventNote(l)}
       ${issue?`<div class="legnote crowd">${esc(issue.detail)}<br><span class="dim">${esc(issue.source)} · ${esc(issue.time)}</span></div>`:""}
     </div></div>`;
 }
@@ -1138,12 +1169,32 @@ function renderNudges(){
 }
 
 /* ---------- sources ---------- */
+/* Say which of the three sources a crowd figure came from. "Measured"
+   and "predicted" are very different claims and the commuter should be
+   able to tell them apart at a glance. */
+function crowdProvenance(l){
+  if(l.crowdSource==="live")     return "(measured now)";
+  if(l.crowdSource==="forecast") return "(LTA forecast)";
+  if(l.crowdSource==="event model") return "(predicted, event)";
+  return "(estimated)";
+}
+/* When an event is driving the prediction, name it and say what to do.
+   A number with no reason behind it is not decision support. */
+function eventNote(l){
+  const evs=l.crowdEvents||[];
+  if(!evs.length) return "";
+  const e=evs[0];
+  return `<div class="legnote crowd"><b>${esc(e.name)}</b> — ${esc(e.advice||"")}
+    <br><span class="dim">Predicted from a curated event calendar, not a live feed.
+    An LTA measurement would override it.</span></div>`;
+}
+
 function renderSources(){
   const live=LIVE.on;
   const S=[
-    {n:"Rail faults and disruptions",s:"SGMRT Telegram channel",
-     st:live&&LIVE.caps.feed?"Live, polled每60s".replace("每","every "):"Snapshot",tone:"soft",
-     d:"The public preview page at t.me/s/sgmrt is plain HTML, so no bot token is needed. Messages are parsed for line names, station pairs and whether service is delayed, suspended or restored."},
+    {n:"Rail faults and disruptions",s:"LTA DataMall TrainServiceAlerts",
+     st:live&&LIVE.caps.feed?"Live, polled every 60s":"Snapshot",tone:"soft",
+     d:"The official structured feed. AffectedSegments carries the affected stations, and FreePublicBus and FreeMRTShuttle carry the mitigation, so the app never has to guess which buses might help. Nothing is scraped."},
     {n:"Planned works and closures",s:"LTA service advisories",
      st:"Snapshot",tone:"soft",
      d:"Early closures, late openings and station upgrading works. These are scheduled rather than live, so they can be fetched once a day and cached."},
@@ -1153,9 +1204,20 @@ function renderSources(){
     {n:"Road traffic",s:"LTA DataMall",
      st:live&&LIVE.caps.datamall?"Live":"Modelled",tone:"soft",
      d:"TrafficIncidents and TrafficSpeedBands. Until connected, bus times use a congestion curve fitted to typical weekday road speeds."},
-    {n:"Bus network",s:"LTA DataMall",
-     st:live&&LIVE.caps.datamall?"Live":"Corridors only",tone:"",
-     d:"BusRoutes, BusStops and v3/BusArrival give real stop sequences and arrival times. This build models twelve road corridors with realistic timings and does not guess service numbers."},
+    (typeof BUS_IDX!=="undefined" && BUS_IDX.loaded
+      ? {n:"Bus network",s:"LTA DataMall BusStops, BusRoutes, BusServices",
+         st:"Loaded",tone:"soft",
+         d:`${BUS_IDX.stops.size} stops and ${new Set([...BUS_IDX.routes.keys()].map(k=>k.split(":")[0])).size} services, every stop sequence from BusRoutes, joined to rail by distance. Waiting time uses each service's published frequency band where DataMall gives one, and a model where it does not — each leg says which. Services that have stopped for the night are not offered.`}
+      : {n:"Bus network",s:"LTA DataMall",st:"Corridors only",tone:"",
+         d:"Twelve modelled road corridors stand in. Run fetch-bus-data.mjs with an AccountKey for all 5,000 stops and every service; nothing here guesses a service number."}),
+    {n:"Events and festivals",
+     s:(typeof EVENTS!=="undefined"&&EVENTS.loaded)?"Curated calendar, data/events.json":"Not loaded",
+     st:(typeof EVENTS!=="undefined"&&EVENTS.loaded)
+        ? `${EVENTS.dated.length} dated, ${EVENTS.undated.length} awaiting a date` : "Not loaded",
+     tone:"live",
+     d:(typeof EVENTS!=="undefined"&&EVENTS.loaded)
+        ? `There is no official event-crowding API, so this is a curated file rather than a feed. Events on a lunar or Islamic calendar ship without a date and are NOT applied until someone fills one in — currently ${EVENTS.undated.map(e=>e.name).join(", ")||"none"}. Event predictions are a prior only: any measured level from PCDRealTime or PCDForecast overrides them.`
+        : "data/events.json did not load."},
     {n:"Rail network",s:"Master Plan 2014 station data",st:"Modelled",tone:"soft",
      d:"Eight line segments, every station in running order with its official code, real interchange walking times. Positions are schematic; the GeoJSON supplies true coordinates."},
     {n:"Weather",s:"NEA 24-hour forecast",st:live&&LIVE.caps.weather?"Live":"Snapshot",tone:"soft",
@@ -1442,7 +1504,7 @@ function init(){
     syncForm(); if(state.plan){replan();runPolicy();} save();
   });
   $("#go").onclick=()=>{replan();runPolicy();save();
-    setTimeout(()=>{const m=$("#mapwrap"); if(m&&!m.hidden) m.scrollIntoView({behavior:"smooth",block:"nearest"});},80);};
+    setTimeout(()=>{const m=$("#mapwrap"); if(m&&!m.hidden) m.scrollIntoView&&m.scrollIntoView({behavior:"smooth",block:"nearest"});},80);};
 
   $$("#filters .chip").forEach(c=>c.onclick=()=>{
     state.filter=c.dataset.f;
@@ -1536,7 +1598,62 @@ window.CC={state,FEED,LINES,COORD,LANDMARKS,PLACES,
   replan,renderResult,applyTheme,themeNow,drawMap,toggleWatch,checkWatch,
   get options(){return state.options;}, get plan(){return state.plan;}};
 
+/* ── the real bus network ──────────────────────────────────────────
+   data/bus-index.json is ~1.1 MB (about 230 kB gzipped), so it loads
+   after first paint. Until it arrives the app routes on the twelve
+   modelled corridors and says so; once it does, every bus leg names the
+   service the commuter actually boards. */
+/* The event calendar. Curated, shipped with the app, and small. */
+async function loadEventCalendar(){
+  try{
+    const r = await fetch("data/events.json");
+    if(!r.ok) return;
+    const st = loadEvents(await r.json());
+    console.info(`events: ${st.dated} dated, ${st.undated} awaiting a date`);
+    if(typeof renderSources==="function") renderSources();
+    if(typeof renderEventBanner==="function") renderEventBanner();
+    if(typeof replan==="function" && state && state.plan) replan();
+  }catch(e){ console.warn("event calendar unavailable:", e.message); }
+}
+
+/* Tell the commuter before they ask. If something is on today that
+   touches the network, that belongs at the top of the screen, not
+   buried in a leg. */
+function renderEventBanner(){
+  const host = document.getElementById("eventbanner");
+  if(!host) return;
+  const today = (typeof eventsToday==="function") ? eventsToday(planDate()) : [];
+  if(!today.length){ host.innerHTML=""; return; }
+  host.innerHTML = today.map(e=>`
+    <div class="banner">
+      <h3>${esc(e.name)} today</h3>
+      <p>${esc(e.advice||"")}</p>
+      <div class="src">Predicted from a curated calendar${e.roadClosures
+        ? " · road closures expected, which affects buses more than trains":""}.</div>
+    </div>`).join("");
+}
+
+async function loadBusIndexFile(){
+  try{
+    const r = await fetch("data/bus-index.json");
+    if(!r.ok) return;
+    const data = await r.json();
+    const stat = loadBusIndex(data, {});
+    console.info(`bus network: ${stat.stops} stops, ${stat.services} services, `
+               + `${stat.directions} directions, ${stat.edges} edges in ${stat.ms} ms`);
+    if(typeof renderSources==="function") renderSources();
+    /* Replan on the real network — the corridor route it is showing was
+       built on data we have just superseded. */
+    if(typeof replan==="function" && state && state.plan) replan();
+  }catch(e){
+    console.warn("bus network unavailable, staying on modelled corridors:", e.message);
+  }
+}
+
 init();
+loadBusIndexFile();
+loadEventCalendar();
+
 </script>
 </body>
 </html>

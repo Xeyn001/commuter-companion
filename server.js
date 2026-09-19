@@ -15,12 +15,16 @@
      GET  /                          index.html
      GET  /.netlify/functions/<name> the functions, at their existing paths
      GET  /api/<name>                the same functions, at a sane path
+     GET  /api/bus?from=&to=         which services join two stops
      GET  /healthz                   container liveness
 
    The old /.netlify/ paths are kept because the front end already
    calls them and a judge should not have to care where it is hosted. */
 
 import { createServer } from "node:http";
+import { createGzip } from "node:zlib";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,7 +33,7 @@ const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;   // Cloud Run injects PORT
 
 const FUNCTIONS = {};
-for (const name of ["health", "feed", "datamall", "chat"]) {
+for (const name of ["health", "feed", "datamall", "chat", "bus"]) {
   try {
     FUNCTIONS[name] = (await import(`./netlify/functions/${name}.js`)).default;
   } catch (e) {
@@ -57,7 +61,7 @@ async function toRequest(req) {
   return new Request(url, init);
 }
 
-async function serveStatic(pathname, res) {
+async function serveStatic(pathname, res, req) {
   /* normalize() then reject any traversal that survived it. */
   const rel = normalize(pathname === "/" ? "/index.html" : pathname).replace(/^(\.\.[/\\])+/, "");
   const file = join(ROOT, rel);
@@ -67,14 +71,27 @@ async function serveStatic(pathname, res) {
     if (!s.isFile()) throw new Error("not a file");
     const body = await readFile(file);
     const ext = extname(file).toLowerCase();
-    res.writeHead(200, {
+    /* bus-index.json is 1.1 MB and the rail GeoJSON is 500 kB. Sending
+       those uncompressed over mobile data is not defensible; gzip takes
+       bus-index down to about 230 kB. */
+    const compressible = [".html", ".js", ".css", ".json", ".geojson", ".svg"].includes(ext);
+    const wantsGzip = /\bgzip\b/.test(String(req.headers["accept-encoding"] || ""));
+    const headers = {
       "content-type": MIME[ext] || "application/octet-stream",
       /* index.html must never be cached: it is the whole app. */
       "cache-control": ext === ".html" ? "public, max-age=0, must-revalidate"
                                        : "public, max-age=3600",
       "x-content-type-options": "nosniff",
-      "referrer-policy": "strict-origin-when-cross-origin"
-    });
+      "referrer-policy": "strict-origin-when-cross-origin",
+      "vary": "accept-encoding"
+    };
+    if (compressible && wantsGzip && body.length > 1024) {
+      headers["content-encoding"] = "gzip";
+      res.writeHead(200, headers);
+      await pipeline(Readable.from(body), createGzip(), res);
+      return;
+    }
+    res.writeHead(200, headers);
     res.end(body);
   } catch {
     res.writeHead(404, { "content-type": "text/plain" }).end("not found");
@@ -101,7 +118,7 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    await serveStatic(p, res);
+    await serveStatic(p, res, req);
   } catch (err) {
     console.error("request failed:", err);
     if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });

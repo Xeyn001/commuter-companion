@@ -331,6 +331,7 @@ section{margin:22px 0}
         <span><i style="background:var(--muted);opacity:.65"></i>The other option</span>
       </div>
     </section>
+    <div id="eventbanner"></div>
     <div id="result"></div>
   </div>
 
@@ -699,6 +700,10 @@ const MAX_ACCESS_M = 1200, MAX_ACCESS_STOPS = 4;
 
 function pointOf(place){
   if(COORD[place]) return COORD[place];
+  if(typeof isBusStop==="function" && isBusStop(place)){
+    const s = busStop(place);
+    return [s.la, s.lo];
+  }
   const L = LANDMARKS[place];
   return L ? [L.lat, L.lon] : null;
 }
@@ -706,14 +711,32 @@ function pointOf(place){
    destination, nearest first. A station is its own access point
    (you still have to walk in), a landmark is not. */
 function accessPoints(place, slow){
-  if(COORD[place]) return [{stop:place, mins: slow ? 3 : 2, self:true}];
+  const out = [];
   const p = pointOf(place);
   if(!p) return [];
-  const out = [];
-  for(const [name, c] of Object.entries(COORD)){
-    const m = haversine(p, c);
-    if(m == null || m > MAX_ACCESS_M) continue;
-    out.push({stop:name, mins: walkMinutes(p, c, slow), metres:m, self:false});
+
+  /* Standing at the place itself, when the place is somewhere you can
+     board: a station, or a bus stop. */
+  if(COORD[place]) out.push({stop:place, mins: slow ? 3 : 2, self:true});
+  else if(typeof isBusStop==="function" && isBusStop(place))
+    out.push({stop:place, mins: slow ? 2 : 1, self:true});
+  else {
+    for(const [name, c] of Object.entries(COORD)){
+      const m = haversine(p, c);
+      if(m == null || m > MAX_ACCESS_M) continue;
+      out.push({stop:name, mins: walkMinutes(p, c, slow), metres:m, self:false});
+    }
+  }
+  /* Real bus stops are access points too, and usually the nearest thing
+     to a front door. This runs for stations as well as landmarks: a
+     station is a fine place to start a bus journey, and without this a
+     bus-only trip from a station has nowhere to board. */
+  if(typeof stopsNear==="function" && typeof BUS_IDX!=="undefined" && BUS_IDX.loaded){
+    for(const n of stopsNear(p[0], p[1], MAX_ACCESS_M).slice(0, 6)){
+      if(n.code === place) continue;
+      out.push({stop:n.code, mins: walkMinutes(p, [n.stop.la, n.stop.lo], slow),
+                metres:n.metres, self:false, bus:true});
+    }
   }
   out.sort((a,b)=>a.mins-b.mins);
   return out.slice(0, MAX_ACCESS_STOPS);
@@ -794,17 +817,114 @@ function curveAt(curve, minutes){
   return curve[h]*(1-f)+curve[nx]*f;
 }
 /* Human traffic on a rail leg: base demand × peak direction × line loading. */
-function crowdScore(lineKey, fromSt, toSt, minutes){
+/* The day the journey is planned for. Set by the interface when the
+   commuter picks a date; defaults to today. Events need it — the model
+   does not otherwise know that next Friday is Deepavali. */
+let PLAN_DATE = null;
+const planDate = () => PLAN_DATE || new Date();
+function setPlanDate(d){ PLAN_DATE = d instanceof Date ? d : null; }
+
+/* Crowding at a station, 0 to 1, and where the figure came from.
+
+   Precedence is strict: a measurement always beats the model. Events
+   only ever adjust the model, never a measured level — if LTA says a
+   platform is `l` during Deepavali, it is `l`. */
+function crowdDetail(lineKey, fromSt, toSt, minutes){
+  if(typeof measuredCrowd==="function"){
+    const m = measuredCrowd(fromSt, minutes);
+    if(m) return {value:(LEVEL_VALUE[m.level]??0.6), source:m.source, events:[]};
+  }
   const h=Math.floor(minutes/60)%24;
   const base=curveAt(DAYCURVE,minutes);
   let dir=1;
   if(h>=7&&h<10) dir = CBD.has(toSt)?1.25:(CBD.has(fromSt)?0.7:1);
   if(h>=17&&h<20) dir = CBD.has(fromSt)?1.25:(CBD.has(toSt)?0.7:1);
-  return Math.max(0,Math.min(1, base*dir*(LINES[lineKey]?.load??0.8)));
+  let v = base*dir*(LINES[lineKey]?.load??0.8);
+
+  let events=[];
+  if(typeof eventLift==="function"){
+    const boarding = eventLift(fromSt, planDate(), minutes);
+    const alighting = eventLift(toSt,   planDate(), minutes);
+    const lift = Math.max(boarding.lift, alighting.lift);
+    if(lift>1){
+      /* An event lifts the level towards full rather than multiplying
+         past it: a platform cannot be 180% crowded. */
+      v = v + (1-v)*( (lift-1)/1.5 ) + v*(lift-1)*0.35;
+      events = boarding.lift>=alighting.lift ? boarding.events : alighting.events;
+    }
+  }
+  return {value:Math.max(0,Math.min(1,v)), source:events.length?"event model":"modelled", events};
+}
+
+function crowdScore(lineKey, fromSt, toSt, minutes){
+  return crowdDetail(lineKey, fromSt, toSt, minutes).value;
 }
 /* Bus load runs a little behind rail and never gets quite as extreme. */
 function busLoad(minutes){ return Math.max(0,Math.min(1, curveAt(DAYCURVE,minutes)*0.85)); }
 function roadFactor(minutes){ return curveAt(ROADCURVE,minutes); }
+
+/* ---- LIVE CROWDING FROM DATAMALL -----------------------------
+   Station Crowd Density, real-time and forecast: CrowdLevel is l, m, h
+   or NA, per station, per line. PCDForecast is the one that makes
+   proactive advice possible — it is published for the day ahead in
+   30-minute intervals, so the app can warn a commuter at 07:30 that
+   their 08:15 platform will be `h`.
+
+   One call per line; the codes differ from the alert codes, which is
+   what LINE_CODES is for.
+   ------------------------------------------------------------- */
+const CROWD_LIVE=new Map();        // "EW13"      -> "l" | "m" | "h"
+const CROWD_FORECAST=new Map();    // "EW13@480"  -> "l" | "m" | "h"
+const LEVEL_VALUE={l:0.28,m:0.6,h:0.9};
+
+/* GET /ltaodataservice/PCDRealTime?TrainLine=<code> */
+function ingestCrowdRealTime(payload){
+  const v=payload&&payload.value?payload.value:payload;
+  if(!Array.isArray(v)) return 0;
+  let n=0;
+  for(const r of v){
+    if(!r.Station||!r.CrowdLevel||r.CrowdLevel==="NA") continue;
+    CROWD_LIVE.set(r.Station,r.CrowdLevel); n++;
+  }
+  return n;
+}
+/* GET /ltaodataservice/PCDForecast?TrainLine=<code>
+   Keyed to the half hour, so a journey planned for later today can
+   still be advised on. */
+function ingestCrowdForecast(payload){
+  const v=payload&&payload.value?payload.value:payload;
+  if(!Array.isArray(v)) return 0;
+  let n=0;
+  for(const day of v){
+    for(const iv of (day.Stations||day.Intervals||[])){
+      const t=iv.Start||iv.StartTime;
+      if(!t) continue;
+      const d=new Date(t); if(isNaN(d)) continue;
+      const slot=d.getHours()*60+(d.getMinutes()<30?0:30);
+      for(const s of (iv.Stations||[])){
+        if(!s.Station||!s.CrowdLevel||s.CrowdLevel==="NA") continue;
+        CROWD_FORECAST.set(s.Station+"@"+slot,s.CrowdLevel); n++;
+      }
+    }
+  }
+  return n;
+}
+/* A measured level for a station at a time, or null if we have none.
+   Forecast first for a future time, live otherwise. */
+function measuredCrowd(stationName,minutes){
+  const codes=CODES.get(stationName)||[];
+  const slot=Math.floor(minutes/30)*30;
+  for(const c of codes){
+    const f=CROWD_FORECAST.get(c+"@"+slot);
+    if(f) return {level:f,source:"forecast"};
+  }
+  for(const c of codes){
+    const l=CROWD_LIVE.get(c);
+    if(l) return {level:l,source:"live"};
+  }
+  return null;
+}
+const hasLiveCrowd=()=>CROWD_LIVE.size>0||CROWD_FORECAST.size>0;
 
 /* ---- 5. WEATHER --------------------------------------------- */
 const WEATHER_SNAPSHOT = {
@@ -887,7 +1007,7 @@ for(const [k,l] of Object.entries(LINES)){
   }
 }
 const BUS_STOPS=new Map();     // name -> Set(corridorKeys)
-for(const [k,c] of Object.entries(BUS_CORRIDORS))
+for(const [k,c] of Object.entries(BUS_CORRIDORS))   /* modelled fallback */
   for(const s of c.stops){
     if(!BUS_STOPS.has(s)) BUS_STOPS.set(s,new Set());
     BUS_STOPS.get(s).add(k);
@@ -908,8 +1028,8 @@ for(const [k,l] of Object.entries(LINES))
 for(const [k,c] of Object.entries(BUS_CORRIDORS))
   for(let i=0;i<c.stops.length-1;i++){
     const a=nid("BUS:"+k,c.stops[i]), b=nid("BUS:"+k,c.stops[i+1]);
-    link(a,b,c.hop,{kind:"ride",mode:"bus",line:k});
-    link(b,a,c.hop,{kind:"ride",mode:"bus",line:k});
+    link(a,b,c.hop,{kind:"ride",mode:"bus",line:k,corridor:true});
+    link(b,a,c.hop,{kind:"ride",mode:"bus",line:k,corridor:true});
   }
 /* interchanges: rail↔rail, bus↔bus, rail↔bus */
 for(const place of PLACES){
@@ -923,6 +1043,7 @@ for(const place of PLACES){
     else if(a.mode==="bus"&&b.mode==="bus") w=2;
     else w=RAIL_TO_BUS;
     link(nid(a.k,place),nid(b.k,place),w,{kind:"transfer",mode:b.mode,line:b.k,at:place,
+      corridor:(a.mode==="bus"||b.mode==="bus"),
       from:a.mode,toMode:b.mode});
   }
 }
@@ -952,6 +1073,37 @@ const PROFILES={
 };
 
 /* opts: {modes:{rail,bus}, avoidLines:[], maxTransferWalk:number} */
+/* Binary min-heap. The previous version re-sorted an array on every
+   push, which is fine for a few hundred rail nodes and quadratic once
+   the real bus network is loaded — that is ~30,000 nodes. */
+class MinHeap{
+  constructor(){ this.a=[]; }
+  get size(){ return this.a.length; }
+  push(cost,node){
+    const a=this.a; a.push([cost,node]);
+    let i=a.length-1;
+    while(i>0){ const p=(i-1)>>1;
+      if(a[p][0]<=a[i][0]) break;
+      [a[p],a[i]]=[a[i],a[p]]; i=p; }
+  }
+  pop(){
+    const a=this.a;
+    if(!a.length) return null;
+    const top=a[0], last=a.pop();
+    if(a.length){
+      a[0]=last;
+      for(let i=0;;){
+        const l=2*i+1, r=l+1; let s=i;
+        if(l<a.length&&a[l][0]<a[s][0]) s=l;
+        if(r<a.length&&a[r][0]<a[s][0]) s=r;
+        if(s===i) break;
+        [a[s],a[i]]=[a[i],a[s]]; i=s;
+      }
+    }
+    return top;
+  }
+}
+
 function route(fromSt,toSt,departMin,prof,opts){
   opts=opts||{};
   const modes=opts.modes||{rail:true,bus:true};
@@ -966,16 +1118,25 @@ function route(fromSt,toSt,departMin,prof,opts){
   const destAccess   = accessPoints(toSt,   slow);
   if(!originAccess.length || !destAccess.length) return null;
 
+  /* Once the real network is loaded the twelve modelled corridors are
+     switched off completely. Leaving them in would let the router pick a
+     corridor it cannot name a service for, which is exactly the bug this
+     replaces — and they are artificially cheap, having no boarding wait. */
+  const realBus = typeof BUS_IDX!=="undefined" && BUS_IDX.loaded;
   const platformsAt = place => {
     const out=[];
+    /* A five-digit code is a real DataMall stop; it has its own node. */
+    if(modes.bus && typeof isBusStop==="function" && isBusStop(place)) out.push("S|"+place);
     if(modes.rail) for(const k of (STATIONS.get(place)||[])) out.push(nid(k,place));
-    if(modes.bus)  for(const k of (BUS_STOPS.get(place)||[])) out.push(nid("BUS:"+k,place));
+    if(modes.bus && !realBus)
+      for(const k of (BUS_STOPS.get(place)||[])) out.push(nid("BUS:"+k,place));
     return out;
   };
   const destStops = new Map(destAccess.map(a=>[a.stop,a.mins]));
 
-  const dist=new Map(),prev=new Map(),realT=new Map(),pq=[];
-  const push=(n,c)=>{ pq.push([c,n]); pq.sort((a,b)=>a[0]-b[0]); };
+  const dist=new Map(),prev=new Map(),realT=new Map();
+  const pq=new MinHeap();
+  const push=(n,c)=>pq.push(c,n);
   const access=new Map();          // node -> access walk minutes used to reach it
   let seeded=false;
   for(const a of originAccess){
@@ -995,8 +1156,8 @@ function route(fromSt,toSt,departMin,prof,opts){
      the one with the shortest walk on the far side. */
   const DEST="\u0000DEST";
   let goal=null, goalEgress=0, goalStop=null;
-  while(pq.length){
-    const [cost,node]=pq.shift();
+  while(pq.size){
+    const [cost,node]=pq.pop();
     if(cost>(dist.get(node)??Infinity)) continue;
     if(node===DEST){ const p=prev.get(DEST); goal=p[0]; goalEgress=p[2]; goalStop=goal.split("|")[1]; break; }
     const st=node.split("|")[1];
@@ -1010,6 +1171,7 @@ function route(fromSt,toSt,departMin,prof,opts){
     for(const e of (GRAPH.get(node)||[])){
       if(e.mode==="rail"&&!modes.rail) continue;
       if(e.mode==="bus" &&!modes.bus)  continue;
+      if(realBus&&e.corridor) continue;          // superseded by the real network
       const nst=e.to.split("|")[1];
       const elapsed=realT.get(node)||0, clock=departMin+elapsed;
       let mins=e.w,pen=0;
@@ -1034,6 +1196,16 @@ function route(fromSt,toSt,departMin,prof,opts){
           for(const d of FEED) if(busHit(d,cKey)){ mins+=2.7; pen+=4; }
           pen += busLoad(clock)*prof.crowd*0.18;
         }
+      } else if(e.kind==="board"){
+        /* Never board a service that is not running at this hour. */
+        if(typeof serviceRunning==="function" && !serviceRunning(e.line, clock)) continue;
+        /* Waiting for a bus is the honest cost of changing bus, and the
+           reason staying on one service usually beats a clever hop. It
+           comes from the published headway where DataMall gives one. */
+        mins = (typeof busWaitMins==="function") ? busWaitMins(e.line, clock) : 6;
+        pen += (prof.changeCost||0) + Math.max(0, prof.transfer-1)*mins*0.5;
+      } else if(e.kind==="alight"){
+        mins = e.w;
       } else {
         if(prof.stepfree){
           if(e.from==="rail"&&e.toMode==="rail"){
@@ -1042,7 +1214,10 @@ function route(fromSt,toSt,departMin,prof,opts){
           } else mins += 2;
         }
         if(opts.maxTransferWalk!=null && mins>opts.maxTransferWalk) pen += (mins-opts.maxTransferWalk)*6;
-        pen += mins*(prof.transfer-1) + prof.transfer*2.2;
+        /* Flat cost on a stop-to-stop walk, or the router strings three
+           short walks together to save a minute nobody would walk for. */
+        if(e.line==="WALKSTOP") pen += 1.5;
+        pen += mins*Math.max(0, prof.transfer-1) + prof.transfer*2.2;
         /* A flat cost per change, independent of how short the walk is.
            Getting off a train and onto another one has a cost in
            attention and risk that a walking time does not capture. */
@@ -1071,6 +1246,19 @@ function route(fromSt,toSt,departMin,prof,opts){
   t+=acc.mins;
   for(const s of steps){
     const aSt=s.from.split("|")[1], bSt=s.to.split("|")[1];
+    if(s.e.kind==="board"){
+      /* Show the wait as its own step only when it is a change of
+         service. The wait before the first bus belongs to the start of
+         the journey, not to a transfer nobody made. */
+      const prev0=legs[legs.length-1];
+      if(prev0&&prev0.kind==="ride")
+        legs.push({kind:"transfer",at:aSt,mode:"bus",line:s.e.line,
+                   service:serviceNo(s.e.line),mins:s.m,start:t,wait:true,
+                   waitSource:(typeof busWait==="function"
+                     ? busWait(s.e.line,t).source : "modelled")});
+      t+=s.m; continue;
+    }
+    if(s.e.kind==="alight"){ t+=s.m; continue; }
     if(s.e.kind==="transfer"){
       legs.push({kind:"transfer",at:s.e.at,mode:s.e.toMode,line:s.e.line,mins:s.m,start:t});
       t+=s.m; continue;
@@ -1080,14 +1268,16 @@ function route(fromSt,toSt,departMin,prof,opts){
       last.stops.push(bSt); last.mins+=s.m; last.to=bSt;
     } else {
       legs.push({kind:"ride",mode:s.e.mode,line:s.e.line,from:aSt,to:bSt,stops:[aSt,bSt],
-                 mins:s.m,start:t});
+                 mins:s.m,start:t,real:!!s.e.real,
+                 service:s.e.real?serviceNo(s.e.line):null});
     }
     t+=s.m;
   }
   for(const l of legs){
     if(l.kind!=="ride") continue;
     if(l.mode==="rail"){
-      l.crowd=crowdScore(l.line,l.from,l.to,l.start);
+      const cd=crowdDetail(l.line,l.from,l.to,l.start);
+      l.crowd=cd.value; l.crowdSource=cd.source; l.crowdEvents=cd.events;
       l.issues=FEED.filter(d=>{
         for(let i=0;i<l.stops.length-1;i++) if(railHit(d,l.line,l.stops[i],l.stops[i+1])) return true;
         return false;
@@ -1095,7 +1285,7 @@ function route(fromSt,toSt,departMin,prof,opts){
     } else {
       l.crowd=busLoad(l.start);
       l.traffic=roadFactor(l.start);
-      l.issues=FEED.filter(d=>busHit(d,l.line));
+      l.issues=l.real?[]:FEED.filter(d=>busHit(d,l.line));
     }
   }
   /* closing walk */
@@ -1441,6 +1631,403 @@ function suggestPlaces(query, extraStops, limit){
 }
 
 
+/* ══════════════════════════════════════════════════════════════
+   THE REAL BUS NETWORK
+
+   Consumes data/bus-index.json as written by fetch-bus-data.mjs:
+
+     stops        { code: {n, r, la, lo} }
+     services     { serviceNo: {op, cat} }
+     routes       { "service:direction": [stopCode, …] }   in order
+     distances    { "service:direction": [km, …] }         cumulative
+     stopServices { code: ["service:direction", …] }
+
+   Until this loads, routing uses the twelve modelled corridors and the
+   interface says "check the app for the service number". Once it loads,
+   every bus leg names the service the commuter actually boards.
+
+   Roughly 5,200 stops and 800 service-directions become ~30,000 graph
+   nodes, which is why routing needs a real priority queue.
+   ══════════════════════════════════════════════════════════════ */
+
+const BUS_IDX = {
+  loaded:false, stops:new Map(), services:new Map(),
+  routes:new Map(), dists:new Map(), atStop:new Map(),
+  grid:new Map(), edges:0, railJoins:0, builtMs:0, source:null
+};
+
+/* ---- spatial index ------------------------------------------
+   A flat grid. Singapore is 50 km across and we only ever ask for
+   small radii, so this beats anything cleverer. ~0.0018° ≈ 200 m. */
+const BCELL = 0.0018;
+function gridPut(code, la, lo){
+  const k = Math.round(la/BCELL)+":"+Math.round(lo/BCELL);
+  if(!BUS_IDX.grid.has(k)) BUS_IDX.grid.set(k,[]);
+  BUS_IDX.grid.get(k).push(code);
+}
+/* Every stop within `radius` metres of a point, nearest first. */
+function stopsNear(la, lo, radius){
+  const span = Math.ceil(radius/(BCELL*111000));
+  const cy = Math.round(la/BCELL), cx = Math.round(lo/BCELL);
+  const out = [];
+  for(let dy=-span; dy<=span; dy++) for(let dx=-span; dx<=span; dx++){
+    const bucket = BUS_IDX.grid.get((cy+dy)+":"+(cx+dx));
+    if(!bucket) continue;
+    for(const code of bucket){
+      const s = BUS_IDX.stops.get(code);
+      if(!s) continue;
+      const m = haversine([la,lo],[s.la,s.lo]);
+      if(m!=null && m<=radius) out.push({code, metres:m, stop:s});
+    }
+  }
+  return out.sort((a,b)=>a.metres-b.metres);
+}
+
+/* ---- identity ------------------------------------------------
+   A stop is addressed by its five-digit code. Descriptions repeat all
+   over the island — there are dozens of stops called "Blk 123". */
+const isBusStop   = x => BUS_IDX.loaded && BUS_IDX.stops.has(String(x));
+const busStop     = x => BUS_IDX.stops.get(String(x)) || null;
+const busStopName = x => { const s = busStop(x); return s ? s.n : String(x); };
+const busStopLabel= x => { const s = busStop(x); return s ? `${s.n} (${x})` : String(x); };
+const busStopRoad = x => { const s = busStop(x); return s ? s.r : ""; };
+const serviceNo   = key => String(key).split(":")[0];
+
+/* Which services call at a stop. Indexed on load, so this is a lookup
+   rather than a scan of 26,000 route rows. */
+function servicesAt(code){
+  const set = BUS_IDX.atStop.get(String(code));
+  return set ? [...set].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true})) : [];
+}
+
+/* The question the brief actually poses: given two stops, which single
+   service joins them, boarding at A and alighting at B, in that order?
+   Backs both the route renderer and the /api/bus endpoint. */
+function servicesBetween(fromCode, toCode){
+  const a = String(fromCode), b = String(toCode);
+  const out = [];
+  for(const key of (BUS_IDX.atStop.get(a) ? routesThrough(a) : [])){
+    const seq = BUS_IDX.routes.get(key);
+    if(!seq) continue;
+    const i = seq.indexOf(a);
+    if(i < 0) continue;
+    const j = seq.indexOf(b, i+1);          // must come AFTER boarding
+    if(j < 0) continue;
+    const d = BUS_IDX.dists.get(key);
+    out.push({
+      service: serviceNo(key), direction: Number(key.split(":")[1]),
+      stops: j - i,
+      km: d ? Math.round((d[j]-d[i])*10)/10 : null,
+      operator: (BUS_IDX.services.get(serviceNo(key))||{}).op || null
+    });
+  }
+  return out.sort((x,y)=>x.stops-y.stops);
+}
+/* service-directions calling at a stop, as keys */
+function routesThrough(code){
+  const svcs = BUS_IDX.atStop.get(String(code));
+  if(!svcs) return [];
+  const keys = [];
+  for(const key of BUS_IDX.routes.keys())
+    if(svcs.has(serviceNo(key)) && BUS_IDX.routes.get(key).includes(String(code))) keys.push(key);
+  return keys;
+}
+
+/* ---- loading -------------------------------------------------- */
+function loadBusIndex(data, opts){
+  opts = opts || {};
+  const t0 = (typeof performance!=="undefined" ? performance.now() : Date.now());
+
+  BUS_IDX.stops.clear(); BUS_IDX.services.clear(); BUS_IDX.routes.clear();
+  BUS_IDX.dists.clear(); BUS_IDX.atStop.clear(); BUS_IDX.grid.clear();
+  BUS_IDX.edges = 0; BUS_IDX.railJoins = 0;
+
+  let dropped = 0;
+  for(const [code, s] of Object.entries(data.stops||{})){
+    const la = Number(s.la), lo = Number(s.lo);
+    // A few rows carry 0,0. Dropping them beats plotting the Gulf of Guinea.
+    if(!isFinite(la) || !isFinite(lo) || (la===0 && lo===0)){ dropped++; continue; }
+    BUS_IDX.stops.set(code, {n:s.n||code, r:s.r||"", la, lo});
+    gridPut(code, la, lo);
+  }
+  for(const [no, meta] of Object.entries(data.services||{})) BUS_IDX.services.set(no, meta);
+  for(const [key, seq] of Object.entries(data.routes||{}))
+    if(Array.isArray(seq) && seq.length>1) BUS_IDX.routes.set(key, seq.map(String));
+  for(const [key, d] of Object.entries(data.distances||{})) BUS_IDX.dists.set(key, d);
+
+  /* stopServices in the file is stop -> ["svc:dir"]. We want the plain
+     service numbers for display, and keep the keys for routing. */
+  for(const [code, keys] of Object.entries(data.stopServices||{})){
+    if(!BUS_IDX.stops.has(code)) continue;
+    BUS_IDX.atStop.set(code, new Set(keys.map(serviceNo)));
+  }
+
+  BUS_IDX.dropped = dropped;
+  BUS_IDX.source = data.source || "LTA DataMall";
+  BUS_IDX.generated = data.generated || null;
+
+  buildBusGraph(opts);
+
+  BUS_IDX.loaded = BUS_IDX.stops.size > 0 && BUS_IDX.routes.size > 0;
+  BUS_IDX.builtMs = Math.round((typeof performance!=="undefined" ? performance.now() : Date.now()) - t0);
+  return {
+    stops:BUS_IDX.stops.size,
+    services:new Set([...BUS_IDX.routes.keys()].map(serviceNo)).size,
+    directions:BUS_IDX.routes.size,
+    edges:BUS_IDX.edges, railJoins:BUS_IDX.railJoins, ms:BUS_IDX.builtMs, dropped
+  };
+}
+
+/* node ids. `route()` splits on the first "|" to get the place, so the
+   stop code must sit on the right of it in both forms. */
+const stopNode = code        => "S|" + code;
+const rideNode = (key, code) => "V:" + key + "|" + code;
+
+/* Speed is not a constant. A 400 m hop between two kerbside stops is
+   dominated by dwell and traffic lights; a 12 km run down the PIE on an
+   express service is not. A flat figure made express services absurd —
+   service 646 came out at 108 minutes for three stops.
+
+   So speed rises with hop length and flattens out: about 19 km/h for a
+   short urban hop, rising towards 50 km/h on a long expressway leg. The
+   road factor in route() then moves the whole thing with time of day. */
+function busKmh(km){ return 15 + 40*(km/(km+4)); }
+
+function buildBusGraph(opts){
+  const add = (a,b,w,meta) => { link(a,b,w,meta); BUS_IDX.edges++; };
+
+  /* 1. Riding between consecutive stops on one service-direction. */
+  for(const [key, seq] of BUS_IDX.routes){
+    const d = BUS_IDX.dists.get(key);
+    for(let i=0; i<seq.length-1; i++){
+      const a = seq[i], b = seq[i+1];
+      if(!BUS_IDX.stops.has(a) || !BUS_IDX.stops.has(b)) continue;
+      let km = (d && isFinite(d[i]) && isFinite(d[i+1])) ? Math.max(0, d[i+1]-d[i]) : 0;
+      if(!km){
+        const A = BUS_IDX.stops.get(a), B = BUS_IDX.stops.get(b);
+        km = (haversine([A.la,A.lo],[B.la,B.lo])||400)/1000 * 1.25;  // roads are not straight
+      }
+      add(rideNode(key,a), rideNode(key,b), Math.max(0.6, km*(60/busKmh(km))),
+          {kind:"ride", mode:"bus", line:key, real:true});
+    }
+    /* 2. Boarding and alighting. The wait on boarding is what stops the
+          router hopping between services to shave a minute. The service
+          key travels on the edge so the router can look up its published
+          headway and its operating hours at the time of travel. */
+    for(const code of seq){
+      if(!BUS_IDX.stops.has(code)) continue;
+      add(stopNode(code), rideNode(key,code), 0,
+          {kind:"board",  mode:"bus", line:key, at:code});
+      add(rideNode(key,code), stopNode(code), 0.5,
+          {kind:"alight", mode:"bus", line:key, at:code});
+    }
+  }
+
+  /* 3. Walking between nearby stops, so a change can cross a road.
+        Capped at 180 m and six neighbours: past that it is edges nobody
+        would walk and a slower search. */
+  const NEAR = opts.stopWalkRadius ?? 180;
+  for(const [code, s] of BUS_IDX.stops){
+    const near = stopsNear(s.la, s.lo, NEAR).filter(n=>n.code!==code).slice(0,6);
+    for(const n of near)
+      add(stopNode(code), stopNode(n.code), Math.max(1, (n.metres/80)),
+          {kind:"transfer", mode:"bus", at:n.code, from:"bus", toMode:"bus", line:"WALKSTOP"});
+  }
+
+  /* 4. Joining bus to rail. COORD already holds real station positions,
+        so this is a distance join rather than a name guess. */
+  const RAIL_R = opts.railRadius ?? 350;
+  for(const [station, c] of Object.entries(COORD)){
+    if(!STATIONS.has(station)) continue;
+    for(const n of stopsNear(c[0], c[1], RAIL_R).slice(0,5)){
+      const mins = Math.max(2, n.metres/80 + 1);     // +1 to get out of the concourse
+      for(const k of STATIONS.get(station)){
+        add(nid(k,station), stopNode(n.code), mins,
+            {kind:"transfer", mode:"bus",  at:n.code,  from:"rail", toMode:"bus",  line:"TOBUS"});
+        add(stopNode(n.code), nid(k,station), mins,
+            {kind:"transfer", mode:"rail", at:station, from:"bus",  toMode:"rail", line:k});
+      }
+      BUS_IDX.railJoins++;
+    }
+  }
+}
+
+/* ---- waiting, and whether the bus is running at all ------------
+   Two questions the published data answers and a model cannot. */
+
+const dayTypeOf = d => { const x=(d||new Date()).getDay(); return x===0?"sun":x===6?"sat":"wd"; };
+
+/* Which of the four published bands applies at this time. */
+function bandFor(freq, minutes){
+  if(!freq) return null;
+  const h = Math.floor(minutes/60)%24;
+  if(h>=6  && h<9)  return freq.amPeak || freq.amOff;
+  if(h>=17 && h<20) return freq.pmPeak || freq.pmOff;
+  if(h<12)          return freq.amOff  || freq.amPeak;
+  return freq.pmOff || freq.pmPeak || freq.amOff;
+}
+
+/* Expected wait for a passenger turning up at random is about half the
+   headway. BusServices publishes the headway as a band, so use it; the
+   modelled figure is only a fallback for services with no band, and the
+   interface says which one it used. */
+function busWait(key, minutes, dayType){
+  const meta = BUS_IDX.services.get(String(key));
+  const band = bandFor(meta && meta.freq, minutes);
+  if(band){
+    const mid = (band[0] + band[1]) / 2;
+    return { mins: Math.max(1.5, mid/2), source: "published", band };
+  }
+  const h = Math.floor(minutes/60)%24;
+  const mins = (h>=7&&h<10) ? 4 : (h>=17&&h<20) ? 4.5 : (h>=23||h<6) ? 12 : 7;
+  return { mins, source: "modelled", band: null };
+}
+/* The router only wants the number. */
+const busWaitMins = (key, minutes) => busWait(key, minutes).mins;
+
+/* Is this service running at this time, on this kind of day?
+
+   Routing someone onto a bus that stopped at 23:20 is worse than
+   offering no bus at all, and it is the single most common way a
+   transit app loses a user's trust. Services with no published hours
+   are assumed to run — we do not invent a restriction either. */
+function serviceRunning(key, minutes, dayType){
+  const meta = BUS_IDX.services.get(String(key));
+  const hours = meta && meta.hours && meta.hours[dayType || BUS_IDX.dayType || "wd"];
+  if(!hours) return true;
+  const [first, last] = hours;
+  if(first == null || last == null) return true;
+  const t = ((minutes % 1440) + 1440) % 1440;
+  /* A last bus after midnight wraps: 0530–0015 is a normal span. */
+  return last >= first ? (t >= first && t <= last) : (t >= first || t <= last);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   EVENT-AWARE CROWDING
+
+   Three sources of truth about how busy a station will be, in strict
+   order of precedence:
+
+     1. PCDRealTime   — measured, now
+     2. PCDForecast   — measured pattern, per 30 minutes, for today
+     3. this module   — a prior: the daily curve, adjusted for events
+
+   The model NEVER overrides a measurement. It exists for the case the
+   measurements cannot cover: a journey planned for next Friday evening,
+   or a station whose CrowdLevel comes back NA.
+
+   Events come from data/events.json, which is a curated file rather than
+   a feed — there is no official event-crowding API, and pretending
+   otherwise would be fabrication. Events whose date follows a lunar or
+   Islamic calendar ship with `dates: null` and are NOT applied until
+   someone fills the date in. The Sources tab says how many are waiting.
+   ══════════════════════════════════════════════════════════════ */
+
+const EVENTS = {
+  loaded: false, all: [], dated: [], undated: [], version: null, error: null
+};
+
+function loadEvents(data){
+  EVENTS.all = []; EVENTS.dated = []; EVENTS.undated = [];
+  const list = (data && data.events) || [];
+  for(const e of list){
+    const dates = Array.isArray(e.dates) ? e.dates.filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)) : [];
+    const rec = {
+      id:e.id, name:e.name, kind:e.kind||"fixed",
+      dates, window:Array.isArray(e.window)?e.window:[0,24],
+      places:new Set(e.places||[]),
+      lift:Math.max(1, Math.min(2.5, Number(e.lift)||1)),
+      roadClosures:!!e.roadClosures, alsoQuieter:!!e.alsoQuieter,
+      basis:e.basis||"", advice:e.advice||"", dateHint:e.dateHint||""
+    };
+    EVENTS.all.push(rec);
+    (dates.length ? EVENTS.dated : EVENTS.undated).push(rec);
+  }
+  EVENTS.version = (data && data.version) || null;
+  EVENTS.loaded = true;
+  return {events:EVENTS.all.length, dated:EVENTS.dated.length, undated:EVENTS.undated.length};
+}
+
+/* The calendar is Singapore's, so the date must be Singapore's. Using
+   the device's own timezone would put a judge in London on the wrong
+   day for an evening event, and would break the tests on a UTC box. */
+const SG_FMT = (typeof Intl!=="undefined" && Intl.DateTimeFormat)
+  ? new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Singapore",
+      year:"numeric",month:"2-digit",day:"2-digit"})
+  : null;
+const isoDate = d => {
+  const date = d || new Date();
+  if(SG_FMT) return SG_FMT.format(date);            // en-CA formats as YYYY-MM-DD
+  const p = n => String(n).padStart(2,"0");
+  return date.getFullYear()+"-"+p(date.getMonth()+1)+"-"+p(date.getDate());
+};
+
+/* Does the event's time window cover this clock time? A window may run
+   past midnight — a countdown is [20, 26], meaning 20:00 to 02:00. */
+function inWindow(ev, minutes){
+  const h = (minutes/60);
+  const [a,b] = ev.window;
+  if(b <= 24) return h >= a && h < b;
+  return h >= a || h < (b - 24);
+}
+
+/* Events in effect at a given date and time. `when` is a Date for the
+   day; `minutes` is the clock time being planned for. */
+function eventsAt(when, minutes){
+  if(!EVENTS.loaded) return [];
+  const day = isoDate(when || new Date());
+  /* A window running past midnight belongs to the previous day too. */
+  const prev = new Date((when||new Date()).getTime() - 86400000);
+  const prevDay = isoDate(prev);
+  return EVENTS.dated.filter(ev => {
+    if(ev.dates.includes(day) && inWindow(ev, minutes)) return true;
+    if(ev.dates.includes(prevDay) && ev.window[1] > 24 && (minutes/60) < ev.window[1]-24) return true;
+    return false;
+  });
+}
+
+/* The multiplier to apply at one place, and why. Returns 1 and an empty
+   list when nothing applies, which is the normal case. */
+function eventLift(place, when, minutes){
+  const active = eventsAt(when, minutes).filter(ev => ev.places.has(place));
+  if(!active.length) return {lift:1, events:[]};
+  /* Two events at the same place do not multiply — the crowd is not
+     twice as crowded because two things are on. Take the strongest. */
+  const lift = Math.max(...active.map(e => e.lift));
+  return {lift, events:active};
+}
+
+/* Everything on today, for the interface to tell the commuter about
+   before they ask. */
+function eventsToday(when){
+  if(!EVENTS.loaded) return [];
+  const day = isoDate(when || new Date());
+  return EVENTS.dated.filter(ev => ev.dates.includes(day));
+}
+
+/* Which events touch a planned journey, so the advice is specific to
+   this commuter rather than a general notice. */
+function eventsOnPlan(plan, when){
+  if(!plan || !EVENTS.loaded) return [];
+  const hit = new Map();
+  for(const leg of plan.legs){
+    if(leg.kind !== "ride" || !Array.isArray(leg.stops)) continue;
+    for(const stop of leg.stops){
+      const place = (typeof isBusStop==="function" && isBusStop(stop)) ? null : stop;
+      if(!place) continue;
+      for(const ev of eventLift(place, when, leg.start).events)
+        if(!hit.has(ev.id)) hit.set(ev.id, {event:ev, at:place, when:leg.start});
+    }
+  }
+  return [...hit.values()];
+}
+
+/* Road closures are the half of an event that hurts buses rather than
+   trains, and the router should know before it picks a bus. */
+function eventClosesRoads(when, minutes){
+  return eventsAt(when, minutes).some(ev => ev.roadClosures);
+}
+
 
 /* ══════════════════════════════════════════════════════════════
    LIVE DATA DETECTION
@@ -1484,7 +2071,14 @@ function touchesPlan(inc,plan){
   if(!plan) return false;
   return plan.legs.some(l=>{
     if(l.kind==="transfer") return inc.kind==="lift"&&inc.station===l.at;
-    if(l.mode==="bus") return inc.kind==="road"&&inc.corridor===l.line;
+    /* Walking legs carry no stop list, and neither does a wait. Only a
+       ride has stops to test against. */
+    if(l.kind!=="ride"||!Array.isArray(l.stops)) return false;
+    if(l.mode==="bus"){
+      /* A real service is not on a modelled corridor, so corridor-keyed
+         road incidents cannot apply to it. */
+      return !l.real && inc.kind==="road" && inc.corridor===l.line;
+    }
     for(let i=0;i<l.stops.length-1;i++)
       if(inc.line===l.line&&railHit(inc,l.line,l.stops[i],l.stops[i+1])) return true;
     return false;
@@ -1876,7 +2470,8 @@ function walkRow(w){
   else if(w.rain>.4) note=`<div class="legnote rain">${esc(w.text)} around now, but this walk is mostly sheltered.</div>`;
   return `<div class="leg"><div class="t">${hhmm(w.start)}</div>
     <div class="spine"><div class="rail walkrail"></div><div class="node" style="--linecol:var(--dim)"></div></div>
-    <div class="legbody"><div class="legttl">Walk ${w.isStart?"to":"from"} ${esc(w.at)}</div>
+    <div class="legbody"><div class="legttl">Walk ${w.isStart?"to":"from"} ${esc(
+      isBusStop(w.at)?busStopLabel(w.at):w.at)}</div>
       <div class="legsub">${w.mins} min${w.isStart?" — leave by "+hhmm(w.start):""}</div>${note}</div></div>`;
 }
 
@@ -1892,18 +2487,39 @@ function legRow(l){
     const toBus=l.mode==="bus";
     return `<div class="leg"><div class="t">${hhmm(l.start)}</div>
       <div class="spine"><div class="rail walkrail"></div><div class="node" style="--linecol:var(--dim)"></div></div>
-      <div class="legbody"><div class="legttl">${toBus?"Walk to the bus stop at":"Change at"} ${esc(l.at)}</div>
-        <div class="legsub">${Math.round(l.mins)} min${toBus?"":" walk to the "+esc(LINES[l.line]?.short||"")+" platform"}</div>
+      <div class="legbody"><div class="legttl">${l.wait
+          ? `Wait for bus ${esc(l.service||"")}`
+          : `${toBus?"Walk to the bus stop at":"Change at"} ${esc(isBusStop(l.at)?busStopLabel(l.at):l.at)}`}</div>
+        <div class="legsub">${Math.round(l.mins)} min${l.wait
+          ?(l.waitSource==="published"?" expected wait, from the published headway"
+                                      :" typical wait at this time (estimated)")
+          :toBus?"":" walk to the "+esc(LINES[l.line]?.short||"")+" platform"}</div>
         ${stepfree?`<div class="legnote">Step-free adds ${stepfree} min here — the lifts sit at opposite ends of the concourse.</div>`:""}
       </div></div>`;
   }
   if(l.mode==="bus"){
     const c=BUS_CORRIDORS[l.line], n=l.stops.length-1;
     const issue=l.issues&&l.issues[0];
+    /* A real service from DataMall: name it, and name the stops. */
+    if(l.real && l.service){
+      const also=servicesAt(l.from).filter(s=>s!==l.service);
+      const op=(BUS_IDX.services.get(l.service)||{}).op;
+      return `<div class="leg"><div class="t">${hhmm(l.start)}</div>
+        <div class="spine"><div class="rail busrail"></div><div class="node" style="--linecol:var(--bus)"></div></div>
+        <div class="legbody">
+          <div class="legttl">Bus ${esc(l.service)}${op?` <span class="code">${esc(op)}</span>`:""}</div>
+          <div class="legsub">${esc(busStopName(l.from))} <span class="code">${esc(l.from)}</span>
+            to ${esc(busStopName(l.to))} <span class="code">${esc(l.to)}</span>
+            — ${n} stop${n>1?"s":""}, ${Math.round(l.mins)} min</div>
+          <div class="meters">${meter(l.crowd,crowdWord(l.crowd)+" (estimated)")}
+            ${meter(Math.min(1,(l.traffic-1)/0.7),"Traffic "+trafficWord(l.traffic).toLowerCase(),.6)}</div>
+          ${also.length?`<div class="legnote">Also from this stop: ${esc(also.slice(0,6).join(", "))}${also.length>6?" and more":""}.</div>`:""}
+        </div></div>`;
+    }
     return `<div class="leg"><div class="t">${hhmm(l.start)}</div>
       <div class="spine"><div class="rail busrail"></div><div class="node" style="--linecol:var(--bus)"></div></div>
       <div class="legbody">
-        <div class="legttl">Bus along ${esc(c.name)}</div>
+        <div class="legttl">Bus along ${esc(c?c.name:"corridor")}</div>
         <div class="legsub">${esc(l.from)} to ${esc(l.to)} — ${n} stop${n>1?"s":""}, ${Math.round(l.mins)} min
           <span class="code">check the app for the service number</span></div>
         <div class="meters">${meter(l.crowd,crowdWord(l.crowd)+" (estimated)")}
@@ -1920,7 +2536,8 @@ function legRow(l){
       <div class="legttl">${esc(L.name)}</div>
       <div class="legsub">${esc(l.from)} <span class="code">${esc(fc)}</span> to ${esc(l.to)}
         <span class="code">${esc(tc)}</span> — ${n} stop${n>1?"s":""}, ${Math.round(l.mins)} min</div>
-      <div class="meters">${meter(l.crowd,crowdWord(l.crowd)+" (estimated)")}</div>
+      <div class="meters">${meter(l.crowd,crowdWord(l.crowd)+" "+crowdProvenance(l))}</div>
+      ${eventNote(l)}
       ${issue?`<div class="legnote crowd">${esc(issue.detail)}<br><span class="dim">${esc(issue.source)} · ${esc(issue.time)}</span></div>`:""}
     </div></div>`;
 }
@@ -2168,12 +2785,32 @@ function renderNudges(){
 }
 
 /* ---------- sources ---------- */
+/* Say which of the three sources a crowd figure came from. "Measured"
+   and "predicted" are very different claims and the commuter should be
+   able to tell them apart at a glance. */
+function crowdProvenance(l){
+  if(l.crowdSource==="live")     return "(measured now)";
+  if(l.crowdSource==="forecast") return "(LTA forecast)";
+  if(l.crowdSource==="event model") return "(predicted, event)";
+  return "(estimated)";
+}
+/* When an event is driving the prediction, name it and say what to do.
+   A number with no reason behind it is not decision support. */
+function eventNote(l){
+  const evs=l.crowdEvents||[];
+  if(!evs.length) return "";
+  const e=evs[0];
+  return `<div class="legnote crowd"><b>${esc(e.name)}</b> — ${esc(e.advice||"")}
+    <br><span class="dim">Predicted from a curated event calendar, not a live feed.
+    An LTA measurement would override it.</span></div>`;
+}
+
 function renderSources(){
   const live=LIVE.on;
   const S=[
-    {n:"Rail faults and disruptions",s:"SGMRT Telegram channel",
-     st:live&&LIVE.caps.feed?"Live, polled每60s".replace("每","every "):"Snapshot",tone:"soft",
-     d:"The public preview page at t.me/s/sgmrt is plain HTML, so no bot token is needed. Messages are parsed for line names, station pairs and whether service is delayed, suspended or restored."},
+    {n:"Rail faults and disruptions",s:"LTA DataMall TrainServiceAlerts",
+     st:live&&LIVE.caps.feed?"Live, polled every 60s":"Snapshot",tone:"soft",
+     d:"The official structured feed. AffectedSegments carries the affected stations, and FreePublicBus and FreeMRTShuttle carry the mitigation, so the app never has to guess which buses might help. Nothing is scraped."},
     {n:"Planned works and closures",s:"LTA service advisories",
      st:"Snapshot",tone:"soft",
      d:"Early closures, late openings and station upgrading works. These are scheduled rather than live, so they can be fetched once a day and cached."},
@@ -2183,9 +2820,20 @@ function renderSources(){
     {n:"Road traffic",s:"LTA DataMall",
      st:live&&LIVE.caps.datamall?"Live":"Modelled",tone:"soft",
      d:"TrafficIncidents and TrafficSpeedBands. Until connected, bus times use a congestion curve fitted to typical weekday road speeds."},
-    {n:"Bus network",s:"LTA DataMall",
-     st:live&&LIVE.caps.datamall?"Live":"Corridors only",tone:"",
-     d:"BusRoutes, BusStops and v3/BusArrival give real stop sequences and arrival times. This build models twelve road corridors with realistic timings and does not guess service numbers."},
+    (typeof BUS_IDX!=="undefined" && BUS_IDX.loaded
+      ? {n:"Bus network",s:"LTA DataMall BusStops, BusRoutes, BusServices",
+         st:"Loaded",tone:"soft",
+         d:`${BUS_IDX.stops.size} stops and ${new Set([...BUS_IDX.routes.keys()].map(k=>k.split(":")[0])).size} services, every stop sequence from BusRoutes, joined to rail by distance. Waiting time uses each service's published frequency band where DataMall gives one, and a model where it does not — each leg says which. Services that have stopped for the night are not offered.`}
+      : {n:"Bus network",s:"LTA DataMall",st:"Corridors only",tone:"",
+         d:"Twelve modelled road corridors stand in. Run fetch-bus-data.mjs with an AccountKey for all 5,000 stops and every service; nothing here guesses a service number."}),
+    {n:"Events and festivals",
+     s:(typeof EVENTS!=="undefined"&&EVENTS.loaded)?"Curated calendar, data/events.json":"Not loaded",
+     st:(typeof EVENTS!=="undefined"&&EVENTS.loaded)
+        ? `${EVENTS.dated.length} dated, ${EVENTS.undated.length} awaiting a date` : "Not loaded",
+     tone:"live",
+     d:(typeof EVENTS!=="undefined"&&EVENTS.loaded)
+        ? `There is no official event-crowding API, so this is a curated file rather than a feed. Events on a lunar or Islamic calendar ship without a date and are NOT applied until someone fills one in — currently ${EVENTS.undated.map(e=>e.name).join(", ")||"none"}. Event predictions are a prior only: any measured level from PCDRealTime or PCDForecast overrides them.`
+        : "data/events.json did not load."},
     {n:"Rail network",s:"Master Plan 2014 station data",st:"Modelled",tone:"soft",
      d:"Eight line segments, every station in running order with its official code, real interchange walking times. Positions are schematic; the GeoJSON supplies true coordinates."},
     {n:"Weather",s:"NEA 24-hour forecast",st:live&&LIVE.caps.weather?"Live":"Snapshot",tone:"soft",
@@ -2472,7 +3120,7 @@ function init(){
     syncForm(); if(state.plan){replan();runPolicy();} save();
   });
   $("#go").onclick=()=>{replan();runPolicy();save();
-    setTimeout(()=>{const m=$("#mapwrap"); if(m&&!m.hidden) m.scrollIntoView({behavior:"smooth",block:"nearest"});},80);};
+    setTimeout(()=>{const m=$("#mapwrap"); if(m&&!m.hidden) m.scrollIntoView&&m.scrollIntoView({behavior:"smooth",block:"nearest"});},80);};
 
   $$("#filters .chip").forEach(c=>c.onclick=()=>{
     state.filter=c.dataset.f;
@@ -2566,7 +3214,62 @@ window.CC={state,FEED,LINES,COORD,LANDMARKS,PLACES,
   replan,renderResult,applyTheme,themeNow,drawMap,toggleWatch,checkWatch,
   get options(){return state.options;}, get plan(){return state.plan;}};
 
+/* ── the real bus network ──────────────────────────────────────────
+   data/bus-index.json is ~1.1 MB (about 230 kB gzipped), so it loads
+   after first paint. Until it arrives the app routes on the twelve
+   modelled corridors and says so; once it does, every bus leg names the
+   service the commuter actually boards. */
+/* The event calendar. Curated, shipped with the app, and small. */
+async function loadEventCalendar(){
+  try{
+    const r = await fetch("data/events.json");
+    if(!r.ok) return;
+    const st = loadEvents(await r.json());
+    console.info(`events: ${st.dated} dated, ${st.undated} awaiting a date`);
+    if(typeof renderSources==="function") renderSources();
+    if(typeof renderEventBanner==="function") renderEventBanner();
+    if(typeof replan==="function" && state && state.plan) replan();
+  }catch(e){ console.warn("event calendar unavailable:", e.message); }
+}
+
+/* Tell the commuter before they ask. If something is on today that
+   touches the network, that belongs at the top of the screen, not
+   buried in a leg. */
+function renderEventBanner(){
+  const host = document.getElementById("eventbanner");
+  if(!host) return;
+  const today = (typeof eventsToday==="function") ? eventsToday(planDate()) : [];
+  if(!today.length){ host.innerHTML=""; return; }
+  host.innerHTML = today.map(e=>`
+    <div class="banner">
+      <h3>${esc(e.name)} today</h3>
+      <p>${esc(e.advice||"")}</p>
+      <div class="src">Predicted from a curated calendar${e.roadClosures
+        ? " · road closures expected, which affects buses more than trains":""}.</div>
+    </div>`).join("");
+}
+
+async function loadBusIndexFile(){
+  try{
+    const r = await fetch("data/bus-index.json");
+    if(!r.ok) return;
+    const data = await r.json();
+    const stat = loadBusIndex(data, {});
+    console.info(`bus network: ${stat.stops} stops, ${stat.services} services, `
+               + `${stat.directions} directions, ${stat.edges} edges in ${stat.ms} ms`);
+    if(typeof renderSources==="function") renderSources();
+    /* Replan on the real network — the corridor route it is showing was
+       built on data we have just superseded. */
+    if(typeof replan==="function" && state && state.plan) replan();
+  }catch(e){
+    console.warn("bus network unavailable, staying on modelled corridors:", e.message);
+  }
+}
+
 init();
+loadBusIndexFile();
+loadEventCalendar();
+
 </script>
 </body>
 </html>

@@ -1,7 +1,14 @@
+# What NOT to upload to Cloud Build. Keep in step with .dockerignore.
 .git/
 node_modules/
 .env
+.engine-bundle.mjs
 *.md
-domtest.mjs
 test.mjs
+domtest.mjs
+
+# Raw DataMall pulls — bus-index.json is derived from these and is the
+# only one the app reads at runtime.
 data/bus-routes.json
+data/bus-stops.json
+data/bus-services.json

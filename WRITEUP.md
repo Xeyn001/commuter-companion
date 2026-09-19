@@ -166,3 +166,60 @@ product by nature and we have kept the data footprint at zero.
 Deployed URL and setup: see `README.md`. Cloud deployment: `DEPLOY.md`.
 No credentials are in this repository; `.env.example` lists the variable
 names.
+
+## Bus timing: one assumption worth stating
+
+Inter-stop time is distance divided by a speed that **rises with hop length**:
+about 19 km/h for a short kerbside hop, flattening towards 50 km/h on a long
+expressway leg.
+
+A flat 18 km/h was tried first and was clearly wrong — service 646, which runs
+down the expressway, came out at 108 minutes for three stops. The curve is
+`15 + 40·km/(km+4)`, chosen so a 400 m hop costs ~1.3 min and a 30 km express
+run ~36 min. It is a model, not a measurement; `EstTravelTimes` and
+`v4/TrafficSpeedBands` would replace it with observed speeds.
+
+Waiting time is likewise modelled by time of day (4 min at peak, 12 min late
+evening) and labelled "estimated" in the interface. `BusServices` publishes
+`AM_Peak_Freq` as a band like "8-12"; adding those four fields to
+`fetch-bus-data.mjs` would replace the model with the published headway.
+
+## Event crowd prediction: what is and is not claimed
+
+The honest position on events is that nobody publishes this data, so the model
+is judgement and is labelled as judgement.
+
+**What is evidence:** the locations. Deepavali happens in Little India, the
+countdown happens at Marina Bay, the National Stadium holds 55,000 and empties
+through one Circle Line station. Each calendar entry carries a `basis` field
+recording why it is there.
+
+**What is judgement:** the effect sizes. `lift: 1.9` for National Day is a
+considered guess, not a measurement. It is applied as a shift towards a full
+train rather than a multiplier, so it cannot predict a platform more than full.
+
+**What would replace it with evidence:** `PV/ODTrain` gives monthly
+origin-destination passenger volumes. Comparing Little India's volume in the
+Deepavali month against its twelve-month median would turn every `lift` in the
+file into a measured figure. That is the right next step and it needs no new
+data source — only the key you already have.
+
+**Why a measurement always wins.** `PCDForecast` is published for the day ahead
+in 30-minute intervals. Where it exists it is simply better than any prior, and
+the code path makes that unconditional: `crowdDetail` returns the measured level
+and never consults the calendar. The event model only fills the gap — a journey
+planned for next Friday, or a station returning `NA`.
+
+## Bus timing, revised
+
+Waiting time now comes from the **published frequency band** in `BusServices`
+(`AM_Peak_Freq` and friends, e.g. `"8-12"`), halved, because the expected wait
+for a passenger arriving at random is about half the headway. Services with no
+published band fall back to the model, and each leg in the interface says which
+of the two it used.
+
+The app also refuses to board a service outside its operating hours, from
+`WD_FirstBus` / `WD_LastBus` and the Saturday and Sunday equivalents, including
+the wrap when a last bus runs past midnight. Routing someone onto a bus that
+stopped at 23:20 is the fastest way to lose a user's trust. Services with no
+published hours are assumed to run — we do not invent a restriction either.

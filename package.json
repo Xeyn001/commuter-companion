@@ -4,13 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "node build.js && node server.js",
     "build": "node build.js",
-    "test": "node test.mjs"
+    "test": "node build.js && node test.mjs",
+    "fetch-bus": "node fetch-bus-data.mjs"
   },
   "engines": {
     "node": ">=18"
   },
-  "dependencies": {
+  "devDependencies": {
     "jsdom": "^30.1.0"
   }
 }
