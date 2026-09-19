@@ -1,6 +1,6 @@
 # Commuter Companion
 
-**Live:** _paste your Cloud Run URL here after deploying — see DEPLOY.md_
+**Live:** (https://commuter-companion-955333897887.asia-southeast1.run.app) — see DEPLOY.md_
 
 A mobile-first journey companion for Singapore. Plans door-to-door across rail, bus
 and walking, adapts around live disruptions, and decides when a commuter is better
